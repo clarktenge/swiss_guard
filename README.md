@@ -1,8 +1,8 @@
 # 🛡️ swiss_guard
 
-> Personal AI agent OS — a specialized team that monitors, briefs, and reports so nothing slips through.
+> Personal AI agent workflow that automates what I really don't enjoy doing.
 
-Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, surfaces what matters, and reports into a unified dashboard. Each agent has a defined role. Nothing overlaps. Nothing gets missed.
+Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, surfaces what matters, and reports into a unified dashboard. Each agent has a defined role.
 
 ---
 
