@@ -61,6 +61,7 @@
 
 ### Agent 1 — Email Triage
 **Runs:** 7:00 AM daily via n8n
+
 **What it does:**
 - Scans last 24 hrs across all accounts (via Gmail labels)
 - Flags urgent / time-sensitive emails
@@ -72,6 +73,7 @@
 
 ### Agent 2 — Email Digest
 **Runs:** 7:15 AM daily via n8n (after triage completes)
+
 **What it does:**
 - Deep summaries of ISW (Institute for the Study of War) emails
 - Paragraph-length digests of research papers and articles
@@ -81,6 +83,7 @@
 
 ### Agent 3 — Market Report
 **Runs:** 5:00 PM weekdays via n8n
+
 **What it does:**
 - Pulls your portfolio from Supabase
 - Fetches live quotes and news via Alpha Vantage
@@ -90,6 +93,7 @@
 
 ### Agent 4 — Health Sync
 **Runs:** 6:30 AM daily via n8n
+
 **What it does:**
 - Pulls last 7 days of activities from Strava
 - Summarizes yesterday, week volume, recovery signals
@@ -99,12 +103,21 @@
 
 ### Agent 5 — Weekly Report
 **Runs:** 8:00 PM Sunday via n8n
+
 **What it does:**
 - Workouts completed vs. planned
 - Email volume and themes
 - Academic activity from email parsing
 - Opportunities pipeline from the week
 - Week score + next week priorities
+
+---
+
+### Potential Agent 6 - Web Scraping for jobs
+**Runs:** 2x per week
+
+**What is does:**
+- searches certain company websites for new job posts
 
 ---
 
