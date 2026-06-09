@@ -1,0 +1,8 @@
+anthropic>=0.26.0
+supabase>=2.4.0
+voyageai>=0.2.3
+python-dotenv>=1.0.0
+google-auth>=2.29.0
+google-auth-oauthlib>=1.2.0
+google-api-python-client>=2.126.0
+requests>=2.31.0
