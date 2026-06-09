@@ -45,7 +45,7 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 ## Setup
 
 ```bash
-git clone https://github.com/yourusername/swiss_guard
+git clone https://github.com/clarktenge/swiss_guard
 cd swiss_guard
 cp .env.example .env
 # Fill in your API keys — see docs/architecture.md
