@@ -16,7 +16,7 @@ load_dotenv()
 @dataclass
 class AgentResult:
     content: str                          # markdown-formatted output
-    metadata: dict = field(default_factory=dict)  # any extra data you want to store
+    metadata: dict = field(default_factory=dict)  # can store extra any data
 
 
 class BaseAgent(ABC):
@@ -28,7 +28,7 @@ class BaseAgent(ABC):
       - execute(): the actual logic that produces an AgentResult
 
     Everything else — logging runs, saving memory, calling Claude,
-    retrieving past context — is handled here so you don't repeat it.
+    retrieving past context — is handled here.
     """
 
     def __init__(self):
