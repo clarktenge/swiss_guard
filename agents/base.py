@@ -9,6 +9,7 @@ from anthropic import Anthropic
 from supabase import create_client, Client
 import voyageai
 from dotenv import load_dotenv
+from integrations.discord_notify import notify, notify_error
 
 load_dotenv()
 
@@ -88,6 +89,7 @@ class BaseAgent(ABC):
             )
 
             self._save_output(run_id, result)
+            notify(self.agent_id, result.content)
 
             self.supabase.table("agent_runs").update({
                 "status": "success",
@@ -99,6 +101,7 @@ class BaseAgent(ABC):
             return result
 
         except Exception as e:
+            notify_error(self.agent_id, str(e))
             self.supabase.table("agent_runs").update({
                 "status": "error",
                 "finished_at": datetime.now(timezone.utc).isoformat(),
