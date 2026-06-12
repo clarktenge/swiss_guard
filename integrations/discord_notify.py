@@ -79,35 +79,51 @@ def _post(webhook_url: str, content: str) -> bool:
         return False
 
 
-def notify(agent_id: str, content: str, success: bool = True) -> None:
+def notify(agent_id: str, content: str, success: bool = True) -> bool:
     """
     Send an agent output to its Discord channel via webhook.
+    Returns True only if every chunk was delivered.
 
     Usage in base.py:
         notify(self.agent_id, result.content)
     """
     webhook_url = _get_webhook_url(agent_id)
     if not webhook_url:
-        return
+        return False
 
     status = "✅" if success else "❌"
     header = f"{status} **{agent_id}**\n\n"
-    chunks = _chunk_message(content)
 
-    _post(webhook_url, header + chunks[0])
+    # Chunk the header together with the content so its length counts against
+    # the limit. Prepending it to chunks[0] afterward could push that first
+    # message past Discord's hard 2000-char cap.
+    chunks = _chunk_message(header + content)
 
-    for chunk in chunks[1:]:
-        _post(webhook_url, chunk)
+    results = [_post(webhook_url, chunk) for chunk in chunks]
+    delivered = sum(results)
 
-    print(f"[discord] Notified #{agent_id}")
+    if delivered == len(chunks):
+        print(f"[discord] Notified #{agent_id} ({delivered} chunk(s))")
+        return True
+
+    print(
+        f"[discord] Partial delivery for #{agent_id}: "
+        f"{delivered}/{len(chunks)} chunk(s) sent"
+    )
+    return False
 
 
-def notify_error(agent_id: str, error: str) -> None:
+def notify_error(agent_id: str, error: str) -> bool:
     """Send an error notification to the agent-logs webhook."""
     webhook_url = os.getenv(DEFAULT_WEBHOOK_ENV)
     if not webhook_url:
         print("[discord] No agent-logs webhook configured")
-        return
+        return False
 
-    content = f"❌ **{agent_id} failed**\n```{error[:1800]}```"
-    _post(webhook_url, content)
+    # Neutralize backtick runs in the error so they can't close the code block
+    # early and mangle the message. A zero-width space (U+200B) keeps it looking
+    # identical. chr() avoids putting an invisible character in the source.
+    zwsp = chr(0x200b)
+    safe_error = error[:1800].replace("```", f"`{zwsp}`{zwsp}`")
+    content = f"❌ **{agent_id} failed**\n```{safe_error}```"
+    return _post(webhook_url, content)

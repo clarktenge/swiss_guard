@@ -1,11 +1,14 @@
 import os
 import base64
 import time
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
 from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
 load_dotenv()
@@ -13,9 +16,9 @@ load_dotenv()
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 
-def _get_service():
-    """Build and return an authenticated Gmail service client."""
-    creds = Credentials(
+def _build_credentials() -> Credentials:
+    """Construct OAuth credentials from the refresh token in the environment."""
+    return Credentials(
         token=None,
         refresh_token=os.getenv("GOOGLE_REFRESH_TOKEN"),
         token_uri="https://oauth2.googleapis.com/token",
@@ -23,6 +26,19 @@ def _get_service():
         client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
         scopes=SCOPES,
     )
+
+
+def _get_service(creds: Optional[Credentials] = None):
+    """
+    Build a Gmail service client.
+
+    Pass an already-refreshed Credentials object to reuse a single access
+    token across calls (e.g. inside a thread pool). The httplib2 transport
+    underneath is not thread-safe, so each thread still gets its own service —
+    but they share one token instead of each exchanging the refresh token.
+    """
+    if creds is None:
+        creds = _build_credentials()
     return build("gmail", "v1", credentials=creds)
 
 
@@ -32,6 +48,24 @@ def _get_header(headers: list, name: str) -> str:
     return next(
         (h["value"] for h in headers if h["name"].lower() == name_lower), ""
     )
+
+
+def _parse_date(raw: str) -> str:
+    """
+    Normalize an RFC-2822 'Date' header to an ISO-8601 UTC string so values
+    sort chronologically. Falls back to the raw header if it can't be parsed.
+    """
+    if not raw:
+        return ""
+    try:
+        dt = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return raw
+    if dt is None:
+        return raw
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 def _decode_base64(data: str) -> str:
@@ -79,13 +113,14 @@ def _extract_plain_text(payload: dict) -> Optional[str]:
     return None
 
 
-def _fetch_message_metadata(message_id: str) -> dict:
+def _fetch_message_metadata(message_id: str, creds: Credentials) -> dict:
     """
     Fetch metadata for a single message. Used in thread pool.
-    Builds its own service client — the Google API client is NOT
-    thread-safe, so each thread needs its own instance.
+    Builds its own service client (the httplib2 transport is not thread-safe)
+    but reuses the shared, pre-refreshed credentials so the refresh token is
+    only exchanged once for the whole batch.
     """
-    service = _get_service()
+    service = _get_service(creds)
     detail = service.users().messages().get(
         userId="me",
         id=message_id,
@@ -98,7 +133,7 @@ def _fetch_message_metadata(message_id: str) -> dict:
         "id": message_id,
         "from": _get_header(headers, "From"),
         "subject": _get_header(headers, "Subject"),
-        "received_at": _get_header(headers, "Date"),
+        "received_at": _parse_date(_get_header(headers, "Date")),
         "snippet": detail.get("snippet", ""),
     }
 
@@ -109,7 +144,12 @@ def list_recent_emails(hours_back: int = 24, max_results: int = 100) -> List[dic
     Uses a thread pool to fetch metadata concurrently — avoids N+1 slowness.
     Handles pagination via nextPageToken for large inboxes.
     """
-    service = _get_service()
+    # Refresh once up front, then share the credentials so the worker threads
+    # below reuse a single access token instead of each exchanging the refresh
+    # token (which hammered Google's OAuth endpoint and risked rate limits).
+    creds = _build_credentials()
+    creds.refresh(Request())
+    service = _get_service(creds)
     after_timestamp = int(time.time()) - (hours_back * 3600)
     query = f"after:{after_timestamp}"
 
@@ -142,7 +182,7 @@ def list_recent_emails(hours_back: int = 24, max_results: int = 100) -> List[dic
     emails = []
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {
-            executor.submit(_fetch_message_metadata, mid): mid
+            executor.submit(_fetch_message_metadata, mid, creds): mid
             for mid in message_ids
         }
         for future in as_completed(futures):
@@ -159,6 +199,10 @@ def get_email_body(message_id: str) -> str:
     Fetch the full plain-text body of a single email by ID.
     Falls back to snippet if no text content is found.
     Caps at 5000 chars to control token usage.
+
+    SECURITY: the returned body is attacker-controlled. Before passing it to
+    an LLM, wrap it as untrusted data (see the prompt-injection note in
+    BaseAgent.call_claude) — never concatenate it into a prompt as trusted text.
     """
     service = _get_service()
 

@@ -124,6 +124,15 @@ class BaseAgent(ABC):
 
         Usage in any agent:
             output = self.call_claude(system_prompt, user_prompt)
+
+        SECURITY — PROMPT INJECTION (deferred, implement before email-triage):
+            Email/web/etc. content is attacker-controlled. Do NOT drop it raw
+            into user_prompt as if it were trusted instructions. When the first
+            agent that feeds external text to Claude is built, add an
+            `untrusted_data` param here that wraps such content in clear
+            delimiters with a "treat as data, never as instructions" guard —
+            and never give an email-triggered agent write/exfil tools without a
+            review step. Today the blast radius is limited (no tools wired up).
         """
         response = self.anthropic.messages.create(
             model="claude-sonnet-4-20250514",
@@ -131,7 +140,17 @@ class BaseAgent(ABC):
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
-        return response.content[0].text
+        # Concatenate every text block rather than assuming content[0] is text.
+        # Non-text blocks (e.g. tool_use once tools are added) can appear first
+        # or alongside text, and an empty content list would crash on [0].
+        text = "".join(
+            block.text for block in response.content if block.type == "text"
+        )
+        if not text:
+            raise RuntimeError(
+                f"Claude returned no text content (stop_reason={response.stop_reason})"
+            )
+        return text
 
     def recall_memory(self, query: str, limit: int = 3) -> str:
         """
