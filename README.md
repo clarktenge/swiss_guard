@@ -15,6 +15,7 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 | `market-report` | 5:00 PM (weekdays) | Portfolio P&L, market context, competitor moves |
 | `health-sync` | 6:30 AM | Strava activity, weekly fitness trends |
 | `weekly-report` | 8:00 PM (Sunday) | Full week recap — workouts, work, opportunities |
+| `job-scout` | 8:00 AM daily | New job postings from target company career pages |
 
 ---
 
@@ -34,7 +35,9 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 
 - [x] Architecture + planning
 - [x] Base agent class + memory layer
+- [x] Discord server setup
 - [ ] Email triage + digest agents
+- [ ] Job scout agent
 - [ ] Market report agent
 - [ ] Health sync agent
 - [ ] Weekly report agent
