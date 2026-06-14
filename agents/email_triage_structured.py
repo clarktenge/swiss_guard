@@ -1,6 +1,12 @@
 """
-email-triage — pulls the last 24h of mail, asks Claude to categorize it, and
-returns a *structured* (Pydantic-validated) result instead of free-text markdown.
+email_triage_structured — the FUTURE/WIP structured version of email-triage.
+
+NOTE: This is NOT the active agent. The live, simple agent is in
+agents/email_triage.py. This file is parked here as the starting point for when
+we come back to build the full structured version: Pydantic-validated output +
+Tier 1 evals + (eventually) governance. It still references GPA/grade tracking,
+which the simple version intentionally dropped — revisit that when picking this
+back up.
 
 Why structured: free text can't be checked programmatically. With a typed
 contract we can run cheap, model-free Tier 1 checks on every run (schema
@@ -9,7 +15,7 @@ docs/evals/email-triage.md.
 
 Run it directly to triage your live inbox and print the result + Tier 1 report:
 
-    python agents/email-triage.py
+    python agents/email_triage_structured.py
 
 That path calls execute() only — it hits Gmail and Claude but deliberately
 skips run()'s side effects (Supabase logging, Discord post, Voyage embedding).
