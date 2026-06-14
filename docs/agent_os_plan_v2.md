@@ -17,9 +17,9 @@
 | Piece             | Choice                  | Why                                                                 |
 |-------------------|-------------------------|---------------------------------------------------------------------|
 | LLM               | Anthropic SDK (direct)  | Clean, low abstraction, you see exactly what happens in every call  |
-| Agent logic       | You write this          | The prompts, tools, and decision logic are the whole point          |
-| Tool definitions  | You write these         | Defining what an agent can do is core agent architecture            |
-| Memory design     | You design this         | Context passing between agents and across sessions = the real skill |
+| Agent logic       | Written here            | The prompts, tools, and decision logic are the whole point          |
+| Tool definitions  | Written here            | Defining what an agent can do is core agent architecture            |
+| Memory design     | Written here            | Context passing between agents and across sessions = the real skill |
 
 
 ### Infrastructure 
@@ -37,8 +37,7 @@
 ### Dashboard
 | Version           | Choice                  | Why                                                                 |
 |-------------------|-------------------------|---------------------------------------------------------------------|
-| v1 (weeks 1–3)    | Retool                  | Internal dashboard builder used at real companies. Ship in hours,   |
-|                   |                         | not days. Lets you focus on agents while still having a real UI.    |
+| v1 (weeks 1–3)    | Discord                 | I check this every day, open on phone and laptop. Easy start        |
 | v2 (weeks 4–6)    | React + TypeScript      | Once agents are solid, rebuild the dashboard as the portfolio piece |
 |                   | + Tailwind + Recharts   | with real charts, design, and interactivity.                        |
 
@@ -65,7 +64,6 @@
 **What it does:**
 - Scans last 24 hrs across all accounts (via Gmail labels)
 - Flags urgent / time-sensitive emails
-- Detects grade changes and calculates GPA impact
 - Surfaces job and research opportunities
 - Finds sales, drops, and discounts from subscribed brands
 
