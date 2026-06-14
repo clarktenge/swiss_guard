@@ -69,16 +69,11 @@ broke.
    input, missing from output), none duplicated. This is the check that proves
    the agent processed the whole batch.
 
-3. **GPA math consistency.** For each grade-change item, the stated `gpa_delta`
-   is internally consistent — the arithmetic implied by old→new actually
-   produces the claimed delta direction. I'm not recomputing my real GPA here,
-   just checking the agent didn't say "B replaces A, GPA went up."
-
-4. **Confidence sanity.** Anything in `urgent` with confidence below 0.5 is
+3. **Confidence sanity.** Anything in `urgent` with confidence below 0.5 is
    suspect — if the agent isn't sure it's urgent, it probably shouldn't be in
    the bucket that pings me. These get logged for review rather than hard-failed.
 
-5. **No empty reasons.** Every surfaced item has a non-empty `reason`. An item
+4. **No empty reasons.** Every surfaced item has a non-empty `reason`. An item
    with no justification is the agent padding output.
 
 ## Tier 2 — LLM-as-judge
