@@ -10,7 +10,7 @@ got better or worse without manually reading 70 emails.
 `email-triage` pulls the last 24 hours of mail across my accounts (via
 `integrations/gmail.py`), sends the batch to Claude, and gets back a
 categorization of what matters. Four buckets: urgent/time-sensitive, grade
-changes (with GPA impact), opportunities, and sales/drops. It runs at 7 AM and
+changes, opportunities, and sales/drops. It runs at 7 AM and
 posts to Discord.
 
 The problem with the first version: the output was free-text markdown. There's
@@ -26,7 +26,6 @@ anything else happens to it):
 ```
 TriageOutput
   urgent:        list[EmailItem]
-  grade_changes: list[GradeChangeItem]
   opportunities: list[EmailItem]
   sales:         list[SaleItem]
   uncategorized: list[EmailItem]   # emails the agent chose not to surface
@@ -37,12 +36,6 @@ EmailItem
   subject:    str
   reason:     str        # one sentence: why it's in this bucket
   confidence: float      # 0.0–1.0
-
-GradeChangeItem  (extends EmailItem)
-  course:        str
-  old_grade:     float | None
-  new_grade:     float
-  gpa_delta:     str     # human-readable, e.g. "3.71 → 3.74"
 
 SaleItem  (extends EmailItem)
   brand:      str
@@ -95,7 +88,7 @@ grade everything. Three judges:
   to look at everything the agent *didn't* flag) so I sample rather than run it
   every day.
 
-- **Summary faithfulness.** For grade-change and opportunity items, does the
+- **Summary faithfulness.** For opportunity items, does the
   `reason` accurately reflect the source email? Catches hallucinated details.
 
 The judge is a different model instance with no memory of the original run, so
