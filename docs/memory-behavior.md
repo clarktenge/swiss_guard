@@ -76,8 +76,6 @@ Worth stating, because over-memory is a real failure mode:
 
 ## what breaks first
 
-The honest scaling answer for the interview and for myself:
-
 - **pgvector recall at volume.** The `ivfflat` index I'm using trades exact
   search for speed by clustering vectors into lists. At low volume (my case, a
   few hundred outputs) recall is effectively perfect. As the vector count grows
