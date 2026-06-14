@@ -18,6 +18,8 @@ load_dotenv()
 class AgentResult:
     content: str                          # markdown-formatted output
     metadata: dict = field(default_factory=dict)  # can store extra any data
+    embed: Optional[dict] = None          # optional Discord embed payload; if set,
+                                          # run() posts this instead of plain content
 
 
 class BaseAgent(ABC):
@@ -89,7 +91,7 @@ class BaseAgent(ABC):
             )
 
             self._save_output(run_id, result)
-            notify(self.agent_id, result.content)
+            notify(self.agent_id, result.content, embed=result.embed)
 
             self.supabase.table("agent_runs").update({
                 "status": "success",

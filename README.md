@@ -36,7 +36,7 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 - [x] Architecture + planning
 - [x] Base agent class + memory layer
 - [x] Discord server setup
-- [ ] Email triage + digest agents
+- [x] Email triage + digest agents
 - [ ] Job scout agent
 - [ ] Market report agent
 - [ ] Health sync agent

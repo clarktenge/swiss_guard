@@ -64,12 +64,12 @@ def _chunk_message(text: str) -> List[str]:
     return chunks
 
 
-def _post(webhook_url: str, content: str) -> bool:
-    """POST a single message chunk to a Discord webhook. Returns True on success."""
+def _post(webhook_url: str, payload: dict) -> bool:
+    """POST a single payload to a Discord webhook. Returns True on success."""
     try:
         response = requests.post(
             webhook_url,
-            json={"content": content},
+            json=payload,
             timeout=10,
         )
         response.raise_for_status()
@@ -79,16 +79,33 @@ def _post(webhook_url: str, content: str) -> bool:
         return False
 
 
-def notify(agent_id: str, content: str, success: bool = True) -> bool:
+def notify(
+    agent_id: str,
+    content: str,
+    success: bool = True,
+    embed: Optional[dict] = None,
+) -> bool:
     """
     Send an agent output to its Discord channel via webhook.
     Returns True only if every chunk was delivered.
 
+    If `embed` is given, the message is posted as a single Discord embed
+    (rich card) instead of the chunked plain-text `content`. The `content`
+    string is still what gets saved to memory/Supabase upstream; the embed is
+    purely the Discord presentation.
+
     Usage in base.py:
-        notify(self.agent_id, result.content)
+        notify(self.agent_id, result.content, embed=result.embed)
     """
     webhook_url = _get_webhook_url(agent_id)
     if not webhook_url:
+        return False
+
+    if embed is not None:
+        if _post(webhook_url, {"embeds": [embed]}):
+            print(f"[discord] Notified #{agent_id} (embed)")
+            return True
+        print(f"[discord] Failed to deliver embed for #{agent_id}")
         return False
 
     status = "✅" if success else "❌"
@@ -99,7 +116,7 @@ def notify(agent_id: str, content: str, success: bool = True) -> bool:
     # message past Discord's hard 2000-char cap.
     chunks = _chunk_message(header + content)
 
-    results = [_post(webhook_url, chunk) for chunk in chunks]
+    results = [_post(webhook_url, {"content": chunk}) for chunk in chunks]
     delivered = sum(results)
 
     if delivered == len(chunks):
@@ -126,4 +143,4 @@ def notify_error(agent_id: str, error: str) -> bool:
     zwsp = chr(0x200b)
     safe_error = error[:1800].replace("```", f"`{zwsp}`{zwsp}`")
     content = f"❌ **{agent_id} failed**\n```{safe_error}```"
-    return _post(webhook_url, content)
+    return _post(webhook_url, {"content": content})
