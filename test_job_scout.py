@@ -2,15 +2,15 @@
 # test_job_scout — two parts:
 #
 #   1. OFFLINE unit checks (free, no network, no env, no side effects): exercise
-#      the relevance logic, Claude-output parsing, message formatting, the board
+#      the US-only filter, Claude-match parsing, message formatting, the board
 #      fetchers (against fixture payloads with requests monkeypatched), the
-#      custom scraper's link heuristic, and the agent's seen_jobs diff (against a
-#      fake Supabase). These run on import-and-assert, so `python test_job_scout.py`
-#      fails loudly if any of that logic regresses.
+#      custom dispatch/scrape, and the agent's seen_jobs diff (fake Supabase).
+#      These run on import-and-assert, so `python test_job_scout.py` fails loudly
+#      if any of that logic regresses.
 #
-#   2. ⚠️  LIVE smoke test (opt-in): hits the real job boards, calls Claude
-#      (billed), and — via run() — writes Supabase rows + posts to #💼-job-scout.
-#      Off by default.
+#   2. ⚠️  LIVE smoke tests (opt-in): hit the real job boards, call Claude
+#      (billed), and — via run() — write Supabase rows + post to #💼-job-scout.
+#      Off by default. TEST_MODE in agents/job_scout.py scopes the company list.
 #
 # Run:  python test_job_scout.py            # offline checks only
 #       python test_job_scout.py preview    # offline + live boards + Claude, NO posting
@@ -24,92 +24,70 @@ try:
 except AttributeError:
     pass
 
-from config.companies import RELEVANCE_KEYWORDS
 from agents.job_scout import (
-    is_relevant,
-    filter_relevant_jobs,
-    _parse_oneliners,
+    _passes_us_filter,
+    _parse_matches,
     format_job_message,
     JobScoutAgent,
 )
 import integrations.job_boards as jb
 
 
-# ── Part 1a: relevance logic ────────────────────────────────────────────────
+# ── Part 1a: US-only location filter ────────────────────────────────────────
 
-def test_relevance_target_roles_augment():
-    """target_roles AUGMENT the global keywords — they never replace them."""
-    onebrief_roles = ["outcome engineer", "forward deployed"]
+def test_passes_us_filter():
+    # No / empty location → keep (don't discard on missing data).
+    assert _passes_us_filter({"title": "ML Engineer"}) is True
+    assert _passes_us_filter({"location": ""}) is True
+    assert _passes_us_filter({"location": None}) is True
 
-    # Matches a target_role (not in the global list) → relevant.
-    assert is_relevant("Outcome Engineer", onebrief_roles, RELEVANCE_KEYWORDS)
-    assert is_relevant("Forward Deployed Engineer", onebrief_roles, RELEVANCE_KEYWORDS)
+    # Explicit US signals.
+    assert _passes_us_filter({"location": "San Francisco, CA, United States"}) is True
+    assert _passes_us_filter({"location": "Remote - USA"}) is True
+    assert _passes_us_filter({"location": "Reston, VA"}) is True          # state abbr
+    assert _passes_us_filter({"location": "Austin, Texas"}) is True       # state name
+    # Dict-shaped location is flattened.
+    assert _passes_us_filter({"location": {"city": "Austin", "state": "TX",
+                                           "country": "United States"}}) is True
 
-    # Matches the GLOBAL list even though it's not in target_roles → still
-    # relevant. This is the suppression the augment fix prevents (previously a
-    # narrow target_roles list hid every such role).
-    assert is_relevant("Machine Learning Engineer", onebrief_roles, RELEVANCE_KEYWORDS)
-
-    # Matches neither list → not relevant.
-    assert not is_relevant("Marketing Manager", onebrief_roles, RELEVANCE_KEYWORDS)
-    print("✓ relevance: target_roles augment global keywords (no suppression)")
-
-
-def test_relevance_empty_falls_back_to_global():
-    """A company with an EMPTY target_roles list uses the global keywords."""
-    assert is_relevant("Senior Machine Learning Engineer", [], RELEVANCE_KEYWORDS)
-    assert is_relevant("Computer Vision Researcher", [], RELEVANCE_KEYWORDS)
-    assert is_relevant("Software Engineer, TS/SCI", [], RELEVANCE_KEYWORDS)
-
-    # Genuinely irrelevant → dropped even on the broad global list.
-    assert not is_relevant("Office Manager", [], RELEVANCE_KEYWORDS)
-    assert not is_relevant("Recruiter", [], RELEVANCE_KEYWORDS)
-    print("✓ relevance: empty target_roles falls back to global keywords")
+    # Non-US → dropped.
+    assert _passes_us_filter({"location": "London, United Kingdom"}) is False
+    assert _passes_us_filter({"location": "Tel Aviv, Israel"}) is False
+    print("✓ _passes_us_filter: keeps US + missing, drops non-US")
 
 
-def test_filter_relevant_jobs():
-    jobs = [
-        {"title": "Outcome Engineer", "company": "Onebrief"},
-        {"title": "Office Manager", "company": "Onebrief"},
-        {"title": "Forward Deployed Engineer", "company": "Onebrief"},
-    ]
-    kept = filter_relevant_jobs(jobs, ["outcome engineer", "forward deployed"], RELEVANCE_KEYWORDS)
-    titles = {j["title"] for j in kept}
-    assert titles == {"Outcome Engineer", "Forward Deployed Engineer"}
-    print("✓ filter_relevant_jobs: keeps only matching titles")
+# ── Part 1b: Claude-match parsing + message formatting ──────────────────────
+
+def test_parse_matches_valid():
+    raw = ('[{"company":"Palantir","title":"Forward Deployed Engineer",'
+           '"url":"https://x","reason":"Fits Clark."}]')
+    out = _parse_matches(raw)
+    assert len(out) == 1 and out[0]["company"] == "Palantir"
+    print("✓ _parse_matches: clean JSON array")
 
 
-# ── Part 1b: Claude-output parsing ──────────────────────────────────────────
-
-def test_parse_oneliners_valid():
-    raw = '[{"i": 0, "why": "Fits your CV background."}, {"i": 1, "why": "Clearance match."}]'
-    parsed = _parse_oneliners(raw, 2)
-    assert parsed == {0: "Fits your CV background.", 1: "Clearance match."}
-    print("✓ parse_oneliners: clean JSON array")
+def test_parse_matches_fenced_and_empty():
+    assert _parse_matches('```json\n[]\n```') == []          # fenced empty list
+    assert _parse_matches('[]') == []
+    print("✓ _parse_matches: strips fence, handles empty list")
 
 
-def test_parse_oneliners_fenced_and_out_of_range():
-    raw = '```json\n[{"i": 0, "why": "ok"}, {"i": 9, "why": "dropped"}]\n```'
-    parsed = _parse_oneliners(raw, 1)
-    assert parsed == {0: "ok"}  # fence stripped, out-of-range index dropped
-    print("✓ parse_oneliners: strips code fence, drops out-of-range index")
-
-
-def test_parse_oneliners_garbage():
-    assert _parse_oneliners("Sorry, I can't do that.", 3) == {}
-    assert _parse_oneliners("", 3) == {}
-    print("✓ parse_oneliners: garbage / empty → {} (caller falls back)")
+def test_parse_matches_garbage():
+    assert _parse_matches("Sorry, nothing matched.") == []   # not JSON → []
+    assert _parse_matches('{"not":"a list"}') == []          # not a list → []
+    print("✓ _parse_matches: garbage / non-list → []")
 
 
 def test_format_job_message():
-    job = {"company": "Anduril", "title": "Applied Scientist", "url": "https://x/y"}
-    msg = format_job_message(job, "Synthetic-to-real overlap.", high_priority=True)
-    assert "Anduril" in msg and "Applied Scientist" in msg
-    assert "https://x/y" in msg
-    assert "Synthetic-to-real overlap." in msg
-    assert msg.startswith("⭐")  # high priority gets a star
-    assert not format_job_message(job, "x", high_priority=False).startswith("⭐")
-    print("✓ format_job_message: layout + high-priority star")
+    # Palantir is high-priority in companies.py → 🔴 tag on the company line.
+    msg = format_job_message("Palantir", "Forward Deployed Engineer",
+                             "https://x/y", "Aligns with Clark's FDE target.")
+    assert msg == ("─────────────────────────────\n"
+                   "🏢  **Palantir**  🔴\n"
+                   "📋  Forward Deployed Engineer\n"
+                   "🔗  https://x/y\n"
+                   "💡  Aligns with Clark's FDE target.\n")
+    print("✓ format_job_message: divider + priority tag layout")
 
 
 # ── Part 1c: board fetchers against fixture payloads (requests monkeypatched) ─
@@ -175,8 +153,6 @@ def test_fetch_ashby(monkeypatch_get):
 # ── Part 1c-bis: vendor JSON fetchers behind custom portals ──────────────────
 
 def test_fetch_workday(monkeypatch_post):
-    # First call (term 1) returns a posting; subsequent term calls return the
-    # same one (deduped by externalPath) so the union has exactly one job.
     monkeypatch_post(_FakeResp(json_data={
         "total": 1,
         "jobPostings": [
@@ -217,7 +193,6 @@ def test_fetch_custom_routes_to_vendor(monkeypatch_post, no_sleep):
         "total": 1,
         "jobPostings": [{"title": "Data Scientist", "externalPath": "/job/DC/DS_R2"}],
     }))
-    # Booz Allen's host is in _CUSTOM_VENDORS → Workday.
     company = {"name": "Booz Allen Hamilton",
                "search_url": "https://careers.boozallen.com/jobs/search",
                "search_param": "q"}
@@ -226,12 +201,11 @@ def test_fetch_custom_routes_to_vendor(monkeypatch_post, no_sleep):
     print("✓ fetch_custom: routes a mapped host to its vendor API")
 
 
-# ── Part 1d: custom scraper (heuristic + parsing + never-raises) ─────────────
+# ── Part 1d: custom HTML scraper (heuristic + parsing + never-raises) ────────
 
 def test_looks_like_job_link():
     assert jb._looks_like_job_link("Machine Learning Engineer", "/jobs/123")
     assert jb._looks_like_job_link("Applied Scientist, ISR", "/careers/posting/9")
-    # Chrome / nav links rejected.
     assert not jb._looks_like_job_link("Home", "/")
     assert not jb._looks_like_job_link("Privacy Policy", "/privacy")
     assert not jb._looks_like_job_link("Login", "javascript:void(0)")
@@ -258,15 +232,13 @@ def test_fetch_custom_parses_html(monkeypatch_get, no_sleep):
     }
     out = jb.fetch_custom(company, "machine learning")
     urls = {j["url"] for j in out}
-    # Two distinct job links; the duplicate URL and the chrome links are dropped.
     assert urls == {
         "https://careers.example.com/jobs/100",
         "https://site.com/careers/200",
     }
     assert all(j["source"] == "custom" and j["company"] == "Example Corp" for j in out)
-    # job_id is a stable hash of the URL.
     assert all(len(j["job_id"]) == 16 for j in out)
-    print("✓ fetch_custom: parses links, dedupes, absolutizes URLs, hashes ids")
+    print("✓ fetch_custom: HTML fallback parses links, dedupes, absolutizes, hashes ids")
 
 
 def test_fetch_custom_never_raises(monkeypatch, no_sleep):
@@ -293,7 +265,7 @@ class _FakeQuery:
 
 
 class _FakeSupabase:
-    """Minimal stand-in: seen_jobs already contains job_id 'A' for 'Acme'."""
+    """Minimal stand-in: seen_jobs already contains the given job_ids."""
     def __init__(self, existing):
         self.existing = existing
         self.upserted = []
@@ -333,7 +305,7 @@ def test_find_new_jobs():
     print("✓ _find_new_jobs: returns only unseen job_ids")
 
 
-def test_record_seen_writes_before_filtering():
+def test_record_seen_writes_before_judgment():
     fake = _FakeSupabase(existing=set())
     agent = _bare_agent(fake)
     jobs = [
@@ -343,7 +315,7 @@ def test_record_seen_writes_before_filtering():
     assert len(fake.upserted) == 1
     assert fake.upserted[0]["job_id"] == "B"
     assert fake.upserted[0]["source"] == "greenhouse"
-    print("✓ _record_seen: persists new jobs to seen_jobs")
+    print("✓ _record_seen: persists new jobs to seen_jobs (pre-judgment)")
 
 
 # ── Tiny monkeypatch shim (so this runs without pytest installed) ────────────
@@ -365,16 +337,14 @@ class _Monkeypatch:
 
 def run_offline_checks():
     # Pure helpers — no patching needed.
-    test_relevance_target_roles_augment()
-    test_relevance_empty_falls_back_to_global()
-    test_filter_relevant_jobs()
-    test_parse_oneliners_valid()
-    test_parse_oneliners_fenced_and_out_of_range()
-    test_parse_oneliners_garbage()
+    test_passes_us_filter()
+    test_parse_matches_valid()
+    test_parse_matches_fenced_and_empty()
+    test_parse_matches_garbage()
     test_format_job_message()
     test_looks_like_job_link()
     test_find_new_jobs()
-    test_record_seen_writes_before_filtering()
+    test_record_seen_writes_before_judgment()
 
     # Fetcher tests need requests.get / requests.post / time.sleep patched.
     mp = _Monkeypatch()
@@ -410,14 +380,27 @@ def run_preview():
     result = agent.execute()
     print("\n" + "=" * 60)
     print(result.content)
-    print(f"\nmetadata new_relevant_count={result.metadata['new_relevant_count']}")
+    print(f"matched={result.metadata['matched']} of {result.metadata['new_jobs']} new jobs")
 
 
 def run_live():
     """Full pipeline: live boards + Claude + Discord post + Supabase logging."""
     print("\n⚠️  Running LIVE job-scout (boards + Claude + Discord + Supabase)…\n")
-    agent = JobScoutAgent()  # post=True
+    agent = JobScoutAgent()  # post=True; TEST_MODE scopes the company list
     result = agent.run()
+    if result is None:
+        print("run() returned no result")
+        return
+
+    print("\n--- messages posted to #💼-job-scout (one per match) ---")
+    matches = result.metadata.get("matches", [])
+    if matches:
+        for m in matches:
+            print(format_job_message(m["company"], m["title"], m["url"], m["reason"]))
+            print()
+    else:
+        print("(none)")
+    print("--- final summary message ---")
     print(result.content)
 
 
