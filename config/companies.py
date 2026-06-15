@@ -53,7 +53,8 @@ COMPANIES = [
         "ats": "greenhouse",
         "slug": "andurilindustries",
         "priority": "high",
-        "target_roles": ["applied scientist", "ml engineer", "data scientist"],
+        "target_roles": ["machine learning", "forward deployed", "applied scientist",
+                         "data scientist", "ml", "research engineer"],
     },
     {
         "name": "Vannevar Labs",
@@ -64,7 +65,7 @@ COMPANIES = [
     },
     {
         "name": "Skydio",
-        "ats": "greenhouse",
+        "ats": "ashby",  # migrated off Greenhouse → Ashby board "skydio"
         "slug": "skydio",
         "priority": "high",
         "target_roles": [],
@@ -118,14 +119,16 @@ COMPANIES = [
         "ats": "lever",
         "slug": "palantir",
         "priority": "high",
-        "target_roles": ["forward deployed engineer", "applied scientist"],
+        "target_roles": ["forward deployed", "applied scientist", "machine learning",
+                         "data scientist", "ml", "research engineer"],
     },
     {
         "name": "Shield AI",
         "ats": "lever",
         "slug": "shieldai",
         "priority": "high",
-        "target_roles": ["applied scientist", "ml engineer", "data scientist"],
+        "target_roles": ["machine learning", "forward deployed", "applied scientist",
+                         "data scientist", "ml", "research engineer"],
     },
 
     # ── Custom portals (HTML scraping via BeautifulSoup) ──────────────────────
@@ -283,13 +286,11 @@ RELEVANCE_KEYWORDS = [
     "geospatial",
     "synthetic data",
     "ISR",
-    "signals",
-    # Clearance-aware terms (candidate has active Secret)
-    "cleared",
+    # Clearance-aware terms (candidate has active Secret). Use specific clearance
+    # phrases — broad words like "cleared"/"mission" surfaced non-technical roles.
     "secret clearance",
     "ts/sci",
     "security clearance",
-    "mission",
 ]
 
 # ── Search query for custom portal scraping ───────────────────────────────────

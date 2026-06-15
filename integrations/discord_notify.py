@@ -13,6 +13,7 @@ AGENT_WEBHOOK_MAP = {
     "market-report": "DISCORD_WEBHOOK_MARKET_REPORT",
     "health-sync":   "DISCORD_WEBHOOK_HEALTH_SYNC",
     "weekly-report": "DISCORD_WEBHOOK_WEEKLY_REPORT",
+    "job-scout":     "DISCORD_WEBHOOK_JOB_SCOUT",
     "test":          "DISCORD_WEBHOOK_AGENT_LOGS",
 }
 
@@ -123,6 +124,31 @@ def notify(
         print(f"[discord] Notified #{agent_id} ({delivered} chunk(s))")
         return True
 
+    print(
+        f"[discord] Partial delivery for #{agent_id}: "
+        f"{delivered}/{len(chunks)} chunk(s) sent"
+    )
+    return False
+
+
+def notify_raw(agent_id: str, content: str) -> bool:
+    """
+    Post `content` to an agent's webhook EXACTLY as given — no "✅ **agent**"
+    status header. Used when an agent emits several self-contained messages in
+    one run (e.g. job-scout's one-message-per-job output) and the repeated header
+    would just be noise. Still chunked to stay under Discord's limit.
+    Returns True only if every chunk was delivered.
+    """
+    webhook_url = _get_webhook_url(agent_id)
+    if not webhook_url:
+        return False
+
+    chunks = _chunk_message(content)
+    results = [_post(webhook_url, {"content": chunk}) for chunk in chunks]
+    delivered = sum(results)
+
+    if delivered == len(chunks):
+        return True
     print(
         f"[discord] Partial delivery for #{agent_id}: "
         f"{delivered}/{len(chunks)} chunk(s) sent"
