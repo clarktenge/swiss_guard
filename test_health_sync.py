@@ -22,7 +22,11 @@ try:
 except AttributeError:
     pass
 
-from agents.health_sync import compute_weekly_stats, _week_over_week
+from agents.health_sync import (
+    compute_weekly_stats,
+    _week_over_week,
+    _has_garmin_metrics,
+)
 
 
 # ── Part 1: offline unit checks ─────────────────────────────────────────────
@@ -94,31 +98,107 @@ def test_week_over_week():
     print("✓ _week_over_week: cold start + deltas")
 
 
+def _sample_garmin_metrics():
+    """
+    A full day of Garmin recovery metrics, shaped exactly like
+    integrations.garmin.get_health_metrics() returns — used to feed the combined
+    pipeline without a live Garmin call.
+    """
+    return {
+        "date": "2026-06-14",
+        "sleep": {
+            "duration_h": 7.4,
+            "score": 84,
+            "stages": {"deep_h": 1.3, "light_h": 4.0, "rem_h": 1.7, "awake_h": 0.4},
+        },
+        "hrv": {"last_night_avg_ms": 46, "weekly_avg_ms": 49, "status": "BALANCED"},
+        "body_battery": {"start": 28, "end": 74, "high": 79, "low": 22},
+        "resting_hr_bpm": 51,
+        "steps": 8123,
+        "stress_avg": 31,
+    }
+
+
+def test_has_garmin_metrics():
+    # A real day of metrics → present.
+    assert _has_garmin_metrics(_sample_garmin_metrics()) is True
+
+    # None / empty → absent (Garmin skipped or unavailable).
+    assert _has_garmin_metrics(None) is False
+    assert _has_garmin_metrics({}) is False
+
+    # Dict with only a date and all-None metrics (a no-wear day) → absent: the
+    # gating must look past the date key, not just "is the dict non-None".
+    no_wear = {
+        "date": "2026-06-14",
+        "sleep": None, "hrv": None, "body_battery": None,
+        "resting_hr_bpm": None, "steps": None, "stress_avg": None,
+    }
+    assert _has_garmin_metrics(no_wear) is False
+
+    # A single real metric is enough to warrant the recovery section.
+    assert _has_garmin_metrics({"date": "2026-06-14", "resting_hr_bpm": 50}) is True
+    print("✓ _has_garmin_metrics: gates None / empty / no-wear / partial")
+
+
 def run_offline_checks():
     test_compute_weekly_stats()
     test_empty_week()
     test_week_over_week()
+    test_has_garmin_metrics()
     print("\nAll offline checks passed ✅")
 
 
-# ── Part 2: live smoke test (opt-in) ────────────────────────────────────────
+# ── Part 2: live smoke tests (opt-in) ───────────────────────────────────────
+#
+#   live    — full combined pipeline: Strava + Garmin (both live) + Claude,
+#             then run()'s side effects (Discord + Supabase).
+#   combo   — combined OUTPUT preview with NO side effects: pulls Strava live,
+#             INJECTS sample Garmin metrics (so it works even without a Garmin
+#             session), calls Claude, and prints the markdown. Cheaper way to
+#             eyeball that the recovery section renders from Garmin data.
 
-RUN_LIVE = False  # flip to True, or pass `live` on the command line
+RUN_LIVE = False  # flip to True, or pass `live` / `combo` on the command line
 
 
 def run_live():
     from agents.health_sync import HealthSyncAgent
 
-    print("\n⚠️  Running LIVE health-sync (Strava + Claude + Discord + Supabase)…\n")
-    agent = HealthSyncAgent()  # garmin_data=None for now
+    print("\n⚠️  Running LIVE health-sync (Strava + Garmin + Claude + Discord + Supabase)…\n")
+    agent = HealthSyncAgent()  # pulls both Strava + Garmin live
 
     # run() = full pipeline (execute → Supabase logging → Discord post).
     # Swap for agent.execute() to preview the markdown with no side effects.
     result = agent.run()
+    print(f"[has_garmin={result.metadata.get('has_garmin')}]\n")
     print(result.content)
+
+
+def run_combined_preview():
+    """Combined output (Strava live + injected Garmin), no side effects."""
+    from agents.health_sync import HealthSyncAgent
+
+    print("\n⚠️  Previewing COMBINED output (Strava live + sample Garmin + Claude)…\n")
+    # Inject Garmin metrics so the recovery section has data to work with even
+    # without a live Garmin session; execute() then skips the live Garmin call.
+    agent = HealthSyncAgent(garmin_data=_sample_garmin_metrics())
+
+    result = agent.execute()  # no Supabase / Discord / embedding side effects
+    assert result.metadata.get("has_garmin") is True, "Garmin data didn't reach the agent"
+
+    content = result.content
+    # The combined briefing should carry both sources through to the markdown:
+    # the Python-rendered Strava stats line and Claude's recovery read.
+    assert "Health sync" in content
+    print(f"[has_garmin={result.metadata.get('has_garmin')}]\n")
+    print(content)
+    print("\n✓ combined preview rendered (Strava stats + Garmin recovery)")
 
 
 if __name__ == "__main__":
     run_offline_checks()
-    if RUN_LIVE or "live" in sys.argv[1:]:
+    args = sys.argv[1:]
+    if RUN_LIVE or "live" in args:
         run_live()
+    if "combo" in args:
+        run_combined_preview()
