@@ -1,0 +1,47 @@
+name: email-digest
+
+on:
+  schedule:
+    # 14:15 UTC daily (7:15 AM PDT)
+    - cron: "15 14 * * *"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+      GARMIN_TOKENSTORE: ${{ secrets.GARMIN_TOKENSTORE }}
+      GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+      GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+      GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+      GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+      GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+      STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
+      STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+      STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
+      DISCORD_WEBHOOK_EMAIL_TRIAGE: ${{ secrets.DISCORD_WEBHOOK_EMAIL_TRIAGE }}
+      DISCORD_WEBHOOK_EMAIL_DIGEST: ${{ secrets.DISCORD_WEBHOOK_EMAIL_DIGEST }}
+      DISCORD_WEBHOOK_MARKET_REPORT: ${{ secrets.DISCORD_WEBHOOK_MARKET_REPORT }}
+      DISCORD_WEBHOOK_HEALTH_SYNC: ${{ secrets.DISCORD_WEBHOOK_HEALTH_SYNC }}
+      DISCORD_WEBHOOK_WEEKLY_REPORT: ${{ secrets.DISCORD_WEBHOOK_WEEKLY_REPORT }}
+      DISCORD_WEBHOOK_JOB_SCOUT: ${{ secrets.DISCORD_WEBHOOK_JOB_SCOUT }}
+      DISCORD_WEBHOOK_AGENT_LOGS: ${{ secrets.DISCORD_WEBHOOK_AGENT_LOGS }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run email-digest
+        continue-on-error: true
+        run: python -c "from agents.email_digest import EmailDigestAgent; EmailDigestAgent().run()"
