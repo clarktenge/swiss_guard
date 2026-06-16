@@ -22,7 +22,7 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 ## Stack
 
 - **Agents** — Anthropic SDK (Claude), written in Python
-- **Orchestration** — n8n (scheduling, retries, agent dependencies)
+- **Orchestration** — Github (scheduling, retries, agent dependencies)
 - **Memory** — Supabase (Postgres + pgvector) + Voyage AI embeddings
 - **Dashboard** — Retool (v1) → React + TypeScript (v2)
 - **Integrations** — Gmail, Strava, Garmin, Alpha Vantage
@@ -33,6 +33,8 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 
 🚧 Active development — started 6/10/2026
 
+v1 Complete - 6/16/2026
+
 - [x] Architecture + planning
 - [x] Base agent class + memory layer
 - [x] Discord server setup
@@ -40,8 +42,8 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 - [x] Market report agent
 - [x] Health sync agent
 - [x] Job scout agent
-- [ ] Weekly report agent
-- [ ] n8n scheduler
+- [x] Weekly report agent
+- [x] Github Actions Scheduler
 - [ ] React dashboard (v2)
 
 ---
