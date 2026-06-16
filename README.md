@@ -41,6 +41,7 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 - [x] Health sync agent
 - [x] Job scout agent
 - [ ] Weekly report agent
+- [ ] n8n scheduler
 - [ ] React dashboard (v2)
 
 ---
