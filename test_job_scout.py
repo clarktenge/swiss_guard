@@ -79,15 +79,24 @@ def test_parse_matches_garbage():
 
 
 def test_format_job_message():
-    # Palantir is high-priority in companies.py → 🔴 tag on the company line.
+    # Palantir is high-priority in companies.py → 🔴 tag leads the company line.
     msg = format_job_message("Palantir", "Forward Deployed Engineer",
-                             "https://x/y", "Aligns with Clark's FDE target.")
+                             "https://x/y", "Washington, DC",
+                             "Aligns with Clark's FDE target.")
     assert msg == ("─────────────────────────────\n"
-                   "🏢  **Palantir**  🔴\n"
-                   "📋  Forward Deployed Engineer\n"
-                   "🔗  https://x/y\n"
-                   "💡  Aligns with Clark's FDE target.\n")
-    print("✓ format_job_message: divider + priority tag layout")
+                   "🔴 **Palantir**\n"
+                   "📋 Forward Deployed Engineer\n"
+                   "📍 Washington, DC\n"
+                   "🔗 https://x/y\n"
+                   "💡 Aligns with Clark's FDE target.\n")
+
+    # perfect_fit adds a ⭐ banner under the divider.
+    perfect = format_job_message("Palantir", "Forward Deployed Engineer",
+                                 "https://x/y", "📍 Multiple locations",
+                                 "Aligns with Clark's FDE target.",
+                                 perfect_fit=True)
+    assert perfect.startswith("─────────────────────────────\n⭐ PERFECT FIT\n🔴 **Palantir**\n")
+    print("✓ format_job_message: divider + priority tag + location + perfect-fit")
 
 
 # ── Part 1c: board fetchers against fixture payloads (requests monkeypatched) ─

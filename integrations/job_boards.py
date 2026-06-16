@@ -37,7 +37,7 @@ the agent. They are treated as untrusted data there — see job_scout.py.
 
 import time
 import hashlib
-from typing import List, Dict, Optional
+from typing import List, Dict
 from urllib.parse import urlencode, urljoin, quote_plus, urlparse
 
 import requests

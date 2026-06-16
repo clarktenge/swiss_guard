@@ -1,0 +1,1 @@
+ALTER TABLE watched_jobs ADD COLUMN IF NOT EXISTS location text;

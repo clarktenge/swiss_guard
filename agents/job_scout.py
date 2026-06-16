@@ -11,9 +11,15 @@ Flow (implemented exactly as specified):
   3. seen_jobs (Supabase): keep only jobs not already recorded for that company,
      and record ALL new jobs immediately — regardless of relevance — so a role
      is never shown twice even if Claude later filters it out.
-  4. Claude judgment (replaces the old keyword filter): hand the new jobs to
-     Claude, which returns only the entry-level + relevant ones with a reason.
-  5. Discord: one message per matching job to #💼-job-scout; if nothing matched,
+  4. Multi-location dedup: collapse the same role posted across cities into one
+     entry (location → "📍 Multiple locations") before Claude sees it.
+  5. Claude judgment (replaces the old keyword filter): hard-rejects (degree/
+     experience/seniority/clearance/intern/2026/non-US) plus relevance, returning
+     the survivors with a reason, location, and a perfect_fit flag.
+  6. Watch list: perfect_fit roles are persisted to watched_jobs (deduped by
+     job_id+company) and flagged ⭐ today; every run also re-posts the full
+     watch list as 📌 daily reminders.
+  7. Discord: one message per matching job to #💼-job-scout, then the reminders;
      a single completion summary. Errors go to the agent-logs webhook.
 
 Division of labor: Python owns the facts (US filter, what's new, the counts) and
@@ -47,38 +53,58 @@ from integrations.discord_notify import notify_raw, notify_error  # noqa: E402
 # With TEST_MODE on, only TEST_COMPANIES are scanned — a small, safe set for the
 # first end-to-end live run. Flip to False to scan all of COMPANIES.
 TEST_MODE = True
-TEST_COMPANIES = ["Onebrief", "Anduril", "Palantir", "Shield AI", "Vannevar Labs"]
+TEST_COMPANIES = ["Onebrief", "Palantir", "Anduril"]
 
 # Max job_ids per seen_jobs request. A single .in_() with thousands of ids makes
 # a GET URL long enough for PostgREST to 400; batching keeps each request small.
 _SEEN_BATCH = 100
 
+# Jobs per Claude evaluation call. Sending the whole (potentially thousands-long)
+# candidate list in one shot overruns the model's output budget and truncates the
+# JSON reply to nothing; chunking keeps each call's input + output bounded.
+_CLAUDE_CHUNK = 75
+
 
 # ── Claude prompts (verbatim from the spec) ──────────────────────────────────
 
 CLAUDE_SYSTEM = (
-    "You are a job matching assistant. The candidate is Clark Enge — "
-    "UCSB Statistics & Data Science student, ML Researcher at AFRL studying "
-    "synthetic-to-real data gap for satellite imagery, active Secret clearance, "
-    "background in agentic AI systems, computer vision, and deep learning. "
-    "Target roles: Outcome Engineer, Forward Deployed Engineer, Applied Scientist, "
-    "ML Engineer, AI Engineer."
+    "You are a job matching assistant for Clark Enge — UCSB Statistics & Data \n"
+    "Science student, ML Researcher at AFRL (synthetic-to-real data gap for \n"
+    "satellite imagery), active Secret clearance, background in agentic AI \n"
+    "systems, computer vision, and deep learning. Targeting June 2027 start.\n"
+    "Target roles: Outcome Engineer, Forward Deployed Engineer, Applied \n"
+    "Scientist, ML Engineer, AI Engineer.\n\n"
+    "HARD REJECTS — return nothing for a job if ANY of these are true:\n"
+    "- Requires a Masters degree, PhD, or 2+ years of experience\n"
+    "- Has senior/staff/principal/lead in the title\n"
+    "- Requires ACTIVE TS, TS/SCI, or any clearance above Secret as a \n"
+    '  hard requirement ("must have active TS/SCI" = reject; \n'
+    '  "able to obtain TS/SCI" = keep)\n'
+    "- Is an internship or co-op\n"
+    "- Has a 2026 start date\n"
+    "- Is not US-based or requires visa sponsorship\n\n"
+    "For jobs that pass all hard rejects, return JSON:\n"
+    "[\n"
+    "  {\n"
+    '    "company": str,\n'
+    '    "title": str,\n'
+    '    "url": str,\n'
+    '    "location": str or "Not specified",\n'
+    '    "reason": str,  // one sentence why this fits Clark specifically\n'
+    '    "perfect_fit": bool  // true only if this is an exceptional match\n'
+    "  }\n"
+    "]\n\n"
+    'A "perfect_fit" is a role where Clark\'s specific background \n'
+    "(AFRL satellite imagery research, agentic AI systems, Secret clearance) \n"
+    "maps directly onto what the job is asking for. Use sparingly — \n"
+    "maybe 1 in 20 roles qualifies.\n\n"
+    "Return empty list [] if nothing passes. Return JSON only, no other text."
 )
 
 CLAUDE_USER = (
-    "Here are today's new job postings. Return ONLY the ones that are:\n"
-    "1. Entry-level or new-grad appropriate (0-3 years experience, associate level,\n"
-    "   early career, new graduate, or senior roles clearly open to new grads like\n"
-    "   Forward Deployed Engineer at Palantir or Outcome Engineer at Onebrief)\n"
-    "2. Genuinely relevant to the candidate's ML/AI/defense background\n\n"
-    "For each matching job return JSON:\n"
-    "{\n"
-    '  "company": str,\n'
-    '  "title": str, \n'
-    '  "url": str,\n'
-    '  "reason": str  // one sentence why this fits Clark specifically\n'
-    "}\n\n"
-    "Return an empty list if nothing matches. Return JSON only, no other text."
+    "Here are today's new job postings as a JSON array. Evaluate each one "
+    "against the criteria and hard rejects in your instructions, and return "
+    "the JSON array described there."
 )
 
 
@@ -157,6 +183,125 @@ def _parse_matches(raw: str) -> List[Dict]:
     return [x for x in items if isinstance(x, dict)]
 
 
+# ── Multi-location dedup ─────────────────────────────────────────────────────
+# The same role is frequently posted once per city ("ML Engineer - Austin",
+# "ML Engineer - San Diego", …). We collapse those into one entry before they
+# reach Claude, so Clark sees the role once with a "📍 Multiple locations" tag
+# instead of five near-identical cards.
+
+# Words that, standing alone after a trailing " - ", mark a location suffix.
+_LOCATION_WORDS = {
+    "remote", "hybrid", "onsite", "on-site", "on site", "anywhere",
+    "us", "u.s.", "usa", "united states", "multiple locations",
+}
+# Trailing " - <X>" segments that are role/function qualifiers, NOT locations —
+# these must NOT be stripped, or unrelated roles would wrongly collapse.
+_NON_LOCATION_QUALIFIERS = {
+    "computer vision", "machine learning", "deep learning", "nlp", "llm",
+    "genai", "backend", "back end", "frontend", "front end", "full stack",
+    "platform", "infrastructure", "infra", "data", "research", "security",
+    "embedded", "robotics", "perception", "ml", "ai", "applied", "core",
+    "growth", "new grad", "university grad",
+}
+
+
+def _looks_like_location_suffix(segment: str) -> bool:
+    """
+    True if `segment` (the text after a trailing " - " in a job title) looks
+    like a location rather than a role qualifier. Locations are: known
+    remote/hybrid words, anything carrying a US state name or postal abbr
+    (e.g. "Austin, TX"), or a short Title-Case proper-noun phrase like "Austin"
+    or "San Diego". A small denylist protects function qualifiers like
+    "Computer Vision" / "NLP" from being mistaken for a place.
+    """
+    s = segment.strip()
+    if not s:
+        return False
+    low = s.lower()
+    if low in _NON_LOCATION_QUALIFIERS:
+        return False
+    if low in _LOCATION_WORDS:
+        return True
+    if any(state in low for state in _US_STATE_NAMES):
+        return True
+    if _US_ABBR_RE.search(s):  # case-sensitive postal abbr ("CA", "VA")
+        return True
+    # Bare city: 1–3 capitalized alphabetic words ("Austin", "San Diego").
+    words = s.split()
+    if 1 <= len(words) <= 3 and all(w[:1].isupper() and w.isalpha() for w in words):
+        return True
+    return False
+
+
+# Matches the LAST " - <segment>" (segment itself dash-free) so we can peel
+# location suffixes off one at a time, innermost last.
+_TITLE_SUFFIX_RE = re.compile(r"^(.*\S)\s+[-–—]\s+([^-–—]+?)\s*$")
+
+
+def _normalize_title(title: str) -> str:
+    """
+    Lowercase a title and strip any trailing " - <location>" suffix(es) so the
+    same role across cities maps to one key. "ML Engineer - Remote - Austin"
+    → "ml engineer"; "ML Engineer - Computer Vision" stays
+    "ml engineer - computer vision" (qualifier, not a location).
+    """
+    base = (title or "").strip()
+    while True:
+        m = _TITLE_SUFFIX_RE.match(base)
+        if not m or not _looks_like_location_suffix(m.group(2)):
+            break
+        base = m.group(1).strip()
+    return base.lower()
+
+
+def dedup_multi_location(jobs: List[Dict]) -> List[Dict]:
+    """
+    Collapse jobs that share a (company, normalized-title) key. The first
+    posting in each group is kept; if the group has more than one member its
+    location is stamped "📍 Multiple locations". Single-posting groups keep
+    their own location (or "Not specified"). Input dicts are not mutated —
+    each kept entry is a shallow copy.
+    """
+    groups: Dict[tuple, List[Dict]] = {}
+    for j in jobs:
+        key = (j.get("company", "").strip().lower(), _normalize_title(j.get("title", "")))
+        groups.setdefault(key, []).append(j)
+
+    out: List[Dict] = []
+    for members in groups.values():
+        kept = dict(members[0])
+        if len(members) > 1:
+            kept["location"] = "📍 Multiple locations"
+        else:
+            kept["location"] = kept.get("location") or "Not specified"
+        out.append(kept)
+    return out
+
+
+# ── Cheap Python pre-filter (before any Claude call) ─────────────────────────
+# Obvious hard rejects we can spot from the title alone, so Claude never has to
+# spend a token (or a chunk slot) on them. Matched on word boundaries — a plain
+# substring test would wrongly drop "Internal"/"International" on "intern" — and
+# Claude still applies the same hard rejects, so anything that slips past here is
+# caught downstream; the only failure mode worth avoiding is a false reject that
+# hides a real role from Clark, which the word boundary guards against.
+_TITLE_HARD_REJECT_TERMS = (
+    "senior", "staff", "principal", "lead", "director", "manager",
+    "vp", "vice president", "intern", "co-op", "internship",
+    "phd", "ph.d", "doctorate", "head of",
+)
+_TITLE_HARD_REJECT_RE = re.compile(
+    r"\b(" + "|".join(re.escape(t) for t in _TITLE_HARD_REJECT_TERMS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _title_hard_reject(title: str) -> bool:
+    """True if the title carries an obvious hard-reject term (seniority, intern/
+    co-op, doctorate, management)."""
+    return bool(_TITLE_HARD_REJECT_RE.search(title or ""))
+
+
 # Per-job message presentation. Priority is matched on company name against
 # config/companies.py and shown as a coloured tag on the company line.
 _COMPANY_PRIORITY = {c["name"]: c.get("priority") for c in COMPANIES}
@@ -164,29 +309,59 @@ _PRIORITY_TAG = {"high": "🔴", "medium": "🟡"}
 _JOB_DIVIDER = "─────────────────────────────"
 
 
-def format_job_message(company: str, title: str, url: str, reason: str) -> str:
+def format_job_message(
+    company: str, title: str, url: str, location: str, reason: str,
+    perfect_fit: bool = False,
+) -> str:
     """
     Render the Discord message for one matching job:
 
         ─────────────────────────────
-        🏢  **{company}**  {priority tag}
-        📋  {title}
-        🔗  {url}
-        💡  {reason}
+        ⭐ PERFECT FIT          (only when perfect_fit)
+        {🔴/🟡} **{company}**
+        📋 {title}
+        📍 {location}
+        🔗 {url}
+        💡 {reason}
 
-    A divider tops each message for clear separation between jobs; the company
-    line carries a priority tag (🔴 high / 🟡 medium, looked up from
-    config/companies.py by name); a trailing blank line gives breathing room
-    before the next job's divider.
+    The company line leads with a priority tag (🔴 high / 🟡 medium, looked up
+    from config/companies.py by name; 🔹 if the company has no priority).
+    Perfect-fit roles get a ⭐ PERFECT FIT banner under the divider.
     """
-    tag = _PRIORITY_TAG.get(_COMPANY_PRIORITY.get(company) or "", "")
-    header = f"🏢  **{company}**" + (f"  {tag}" if tag else "")
+    tag = _PRIORITY_TAG.get(_COMPANY_PRIORITY.get(company) or "", "🔹")
+    lines = [_JOB_DIVIDER]
+    if perfect_fit:
+        lines.append("⭐ PERFECT FIT")
+    lines.extend([
+        f"{tag} **{company}**",
+        f"📋 {title}",
+        f"📍 {location}",
+        f"🔗 {url}",
+        f"💡 {reason}",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def format_watch_reminder(
+    company: str, title: str, url: str, location: str, reason: str,
+) -> str:
+    """
+    Render a daily watch-list reminder for a previously-flagged perfect fit:
+
+        ─────────────────────────────
+        📌 **WATCH LIST REMINDER**
+        🏢 {company} — {title}
+        📍 {location}
+        🔗 {url}
+        💡 {reason}
+    """
     return (
         f"{_JOB_DIVIDER}\n"
-        f"{header}\n"
-        f"📋  {title}\n"
-        f"🔗  {url}\n"
-        f"💡  {reason}\n"
+        f"📌 **WATCH LIST REMINDER**\n"
+        f"🏢 {company} — {title}\n"
+        f"📍 {location}\n"
+        f"🔗 {url}\n"
+        f"💡 {reason}\n"
     )
 
 
@@ -293,7 +468,8 @@ class JobScoutAgent(BaseAgent):
             return []
 
         payload = [
-            {"company": j["company"], "title": j["title"], "url": j["url"]}
+            {"company": j["company"], "title": j["title"], "url": j["url"],
+             "location": j.get("location") or "Not specified"}
             for j in jobs
         ]
         try:
@@ -312,21 +488,103 @@ class JobScoutAgent(BaseAgent):
 
         # Guard the links: only trust URLs that were actually in our input. If
         # Claude tweaked a URL, repair it from the original by (company, title);
-        # drop the match if we can't verify it points at a real posting.
+        # drop the match if we can't verify it points at a real posting. We also
+        # recover job_id + location from OUR input rather than trusting Claude,
+        # so the watch-list key is real and the dedup "📍 Multiple locations"
+        # marker survives.
         valid_urls = {j["url"] for j in jobs}
-        by_key = {(j["company"].lower(), j["title"].lower()): j["url"] for j in jobs}
+        by_key = {(j["company"].lower(), j["title"].lower()): j for j in jobs}
         cleaned: List[Dict] = []
         for m in matches:
             if not all(k in m and isinstance(m[k], str) and m[k].strip()
                        for k in ("company", "title", "url", "reason")):
                 continue
+            src = by_key.get((m["company"].lower(), m["title"].lower()))
             if m["url"] not in valid_urls:
-                fixed = by_key.get((m["company"].lower(), m["title"].lower()))
-                if not fixed:
+                if not src:
                     continue
-                m["url"] = fixed
+                m["url"] = src["url"]
+            if src:
+                m["job_id"] = src.get("job_id")
+                m["location"] = src.get("location") or m.get("location") or "Not specified"
+            else:
+                m["location"] = m.get("location") or "Not specified"
+            m["perfect_fit"] = bool(m.get("perfect_fit"))
             cleaned.append(m)
         return cleaned
+
+    def _evaluate_chunked(self, jobs: List[Dict]) -> List[Dict]:
+        """
+        Evaluate jobs in batches of _CLAUDE_CHUNK, one Claude call per chunk, and
+        union the results. Chunks are disjoint, so the union is just a
+        concatenation. Returns [] for an empty input.
+        """
+        if not jobs:
+            return []
+
+        total_chunks = (len(jobs) + _CLAUDE_CHUNK - 1) // _CLAUDE_CHUNK
+        all_matches: List[Dict] = []
+        for n, i in enumerate(range(0, len(jobs), _CLAUDE_CHUNK), start=1):
+            chunk = jobs[i:i + _CLAUDE_CHUNK]
+            print(f"[{self.agent_id}] Evaluating chunk {n} of {total_chunks} "
+                  f"({len(chunk)} jobs)")
+            all_matches.extend(self._evaluate_with_claude(chunk))
+        return all_matches
+
+    # ── Supabase: watched_jobs (perfect-fit daily reminders) ────────────────
+
+    def _watch_if_new(self, match: Dict) -> bool:
+        """
+        Persist a perfect-fit match to watched_jobs if it isn't already there
+        (keyed by job_id + company). Returns True if it was newly added. Never
+        raises — a watch-list hiccup must not sink the run.
+        """
+        job_id = match.get("job_id")
+        company = match.get("company")
+        if not job_id or not company:
+            return False
+        try:
+            existing = (
+                self.supabase.table("watched_jobs")
+                .select("id")
+                .eq("job_id", job_id)
+                .eq("company", company)
+                .execute()
+                .data
+            )
+            if existing:
+                return False
+            self.supabase.table("watched_jobs").insert({
+                "job_id": job_id,
+                "company": company,
+                "title": match.get("title", ""),
+                "url": match.get("url", ""),
+                "location": match.get("location") or "Not specified",
+                "reason": match.get("reason", ""),
+            }).execute()
+            return True
+        except Exception as e:
+            print(f"[{self.agent_id}] watched_jobs write failed for {company}: {e}")
+            notify_error(self.agent_id, f"watched_jobs write failed for {company}: {e}")
+            return False
+
+    def _fetch_watched_jobs(self) -> List[Dict]:
+        """
+        Every row in watched_jobs, oldest first, for the daily reminder re-post.
+        Never raises — on failure logs to agent-logs and returns [].
+        """
+        try:
+            return (
+                self.supabase.table("watched_jobs")
+                .select("job_id, company, title, url, location, reason")
+                .order("added_at")
+                .execute()
+                .data
+            ) or []
+        except Exception as e:
+            print(f"[{self.agent_id}] watched_jobs fetch failed: {e}")
+            notify_error(self.agent_id, f"watched_jobs fetch failed: {e}")
+            return []
 
     # ── Discord ──────────────────────────────────────────────────────────────
 
@@ -365,26 +623,54 @@ class JobScoutAgent(BaseAgent):
             self._record_seen(company_new)
             new_jobs.extend(company_new)
 
-        # STEP 4 — Claude judges the new jobs (entry-level + relevant).
-        matches = self._evaluate_with_claude(new_jobs) if new_jobs else []
+        # STEP 4 — collapse the same role posted across multiple cities into one
+        # entry (seen_jobs already recorded every individual posting above).
+        deduped = dedup_multi_location(new_jobs)
 
-        # STEP 5 — Discord. One message per match (posted here); the returned
+        # STEP 4b — cheap Python pre-filter: drop obvious title hard-rejects
+        # (seniority, intern/co-op, doctorate, management) before spending any
+        # Claude tokens on them.
+        candidates = [j for j in deduped if not _title_hard_reject(j["title"])]
+        prefiltered = len(deduped) - len(candidates)
+        print(f"[{self.agent_id}] pre-filtered {prefiltered} job(s) on title "
+              f"hard-rejects ({len(candidates)} to evaluate)")
+
+        # STEP 4c — Claude judges the survivors in chunks (entry-level + relevant).
+        matches = self._evaluate_chunked(candidates)
+
+        # STEP 5 — watch list: flag perfect fits and persist any new ones so they
+        # come back as daily reminders.
+        perfect = 0
+        for m in matches:
+            if m.get("perfect_fit"):
+                perfect += 1
+                self._watch_if_new(m)
+
+        # STEP 6 — Discord. One message per match (posted here); the returned
         # `content` is what run() posts as the single completion/summary message.
         for m in matches:
             self._emit(format_job_message(
-                m["company"], m["title"], m["url"], m["reason"]
+                m["company"], m["title"], m["url"],
+                m.get("location") or "Not specified", m["reason"],
+                perfect_fit=bool(m.get("perfect_fit")),
             ))
 
-        if matches:
-            content = (
-                f"✅ Job scout complete — {companies_checked} companies checked, "
-                f"{len(new_jobs)} new jobs found, {len(matches)} matched today"
-            )
-        else:
-            content = (
-                f"✅ Job scout complete — {companies_checked} companies checked, "
-                f"{len(new_jobs)} new jobs found, none matched today's criteria"
-            )
+        # STEP 7 — daily watch-list reminder: re-post everything we're watching,
+        # whether or not it surfaced today.
+        watched = self._fetch_watched_jobs()
+        for w in watched:
+            self._emit(format_watch_reminder(
+                w.get("company", ""), w.get("title", ""), w.get("url", ""),
+                w.get("location") or "Not specified", w.get("reason", ""),
+            ))
+
+        matched_note = f"{len(matches)} matched today" if matches else "none matched today's criteria"
+        perfect_note = f", {perfect} ⭐ perfect fit" if perfect else ""
+        content = (
+            f"✅ Job scout complete — {companies_checked} companies checked, "
+            f"{len(new_jobs)} new jobs found, {matched_note}{perfect_note} "
+            f"({len(watched)} on watch list)"
+        )
 
         return AgentResult(
             content=content,
@@ -392,7 +678,12 @@ class JobScoutAgent(BaseAgent):
                 "companies_checked": companies_checked,
                 "jobs_scanned": jobs_scanned,
                 "new_jobs": len(new_jobs),
+                "deduped": len(deduped),
+                "prefiltered": prefiltered,
+                "candidates": len(candidates),
                 "matched": len(matches),
+                "perfect_fits": perfect,
+                "watched": len(watched),
                 "matches": matches,
                 "test_mode": TEST_MODE,
             },
