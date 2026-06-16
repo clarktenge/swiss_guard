@@ -24,7 +24,7 @@ DISCORD_MAX_CHARS = 1900
 def _get_webhook_url(agent_id: str) -> Optional[str]:
     """Resolve the webhook URL for a given agent. Returns None if not set."""
     env_key = AGENT_WEBHOOK_MAP.get(agent_id, DEFAULT_WEBHOOK_ENV)
-    url = os.getenv(env_key)
+    url = os.getenv(env_key, "").strip()
     if not url:
         print(f"[discord] No webhook configured for '{agent_id}' (env: {env_key})")
     return url
@@ -158,7 +158,7 @@ def notify_raw(agent_id: str, content: str) -> bool:
 
 def notify_error(agent_id: str, error: str) -> bool:
     """Send an error notification to the agent-logs webhook."""
-    webhook_url = os.getenv(DEFAULT_WEBHOOK_ENV)
+    webhook_url = os.getenv(DEFAULT_WEBHOOK_ENV, "").strip()
     if not webhook_url:
         print("[discord] No agent-logs webhook configured")
         return False

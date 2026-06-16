@@ -35,12 +35,12 @@ class BaseAgent(ABC):
     """
 
     def __init__(self):
-        self.anthropic = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        self.anthropic = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", "").strip())
         self.supabase: Client = create_client(
-            os.getenv("SUPABASE_URL"),
-            os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            os.getenv("SUPABASE_URL", "").strip(),
+            os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
         )
-        self.voyage = voyageai.Client(api_key=os.getenv("VOYAGE_API_KEY"))
+        self.voyage = voyageai.Client(api_key=os.getenv("VOYAGE_API_KEY", "").strip())
 
     # ── Abstract interface ─────────────────────────────────────────────────────
 

@@ -51,9 +51,9 @@ def _refresh_access_token() -> str:
     Called at the start of every public function in this module — access tokens
     are short-lived, so we don't bother caching one.
     """
-    client_id = os.getenv("STRAVA_CLIENT_ID")
-    client_secret = os.getenv("STRAVA_CLIENT_SECRET")
-    refresh_token = os.getenv("STRAVA_REFRESH_TOKEN")
+    client_id = os.getenv("STRAVA_CLIENT_ID", "").strip()
+    client_secret = os.getenv("STRAVA_CLIENT_SECRET", "").strip()
+    refresh_token = os.getenv("STRAVA_REFRESH_TOKEN", "").strip()
 
     if not (client_id and client_secret and refresh_token):
         raise RuntimeError(

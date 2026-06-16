@@ -20,10 +20,10 @@ def _build_credentials() -> Credentials:
     """Construct OAuth credentials from the refresh token in the environment."""
     return Credentials(
         token=None,
-        refresh_token=os.getenv("GOOGLE_REFRESH_TOKEN"),
+        refresh_token=os.getenv("GOOGLE_REFRESH_TOKEN", "").strip(),
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=os.getenv("GOOGLE_CLIENT_ID"),
-        client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+        client_id=os.getenv("GOOGLE_CLIENT_ID", "").strip(),
+        client_secret=os.getenv("GOOGLE_CLIENT_SECRET", "").strip(),
         scopes=SCOPES,
     )
 

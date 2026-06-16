@@ -38,7 +38,7 @@ _SECONDS_PER_HOUR = 3600.0
 
 # Where we cache Garmin session tokens so a daily run doesn't re-login (and trip
 # Garmin's login rate limit) every time. Override with GARMIN_TOKENSTORE.
-_TOKENSTORE = os.getenv("GARMIN_TOKENSTORE") or os.path.expanduser("~/.garminconnect")
+_TOKENSTORE = os.getenv("GARMIN_TOKENSTORE", "").strip() or os.path.expanduser("~/.garminconnect")
 
 
 # ── Authentication ──────────────────────────────────────────────────────────
@@ -60,8 +60,8 @@ def _login() -> Garmin:
     seeing 429s, you're IP-rate-limited from earlier logins — wait for it to
     clear; once one login succeeds the tokens cache and later runs skip login.
     """
-    email = os.getenv("GARMIN_EMAIL")
-    password = os.getenv("GARMIN_PASSWORD")
+    email = os.getenv("GARMIN_EMAIL", "").strip()
+    password = os.getenv("GARMIN_PASSWORD", "").strip()
     if not (email and password):
         raise RuntimeError(
             "Garmin credentials missing — set GARMIN_EMAIL and GARMIN_PASSWORD "
