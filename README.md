@@ -22,7 +22,7 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 ## Stack
 
 - **Agents** — Anthropic SDK (Claude), written in Python
-- **Orchestration** — Github (scheduling, retries, agent dependencies)
+- **Orchestration** — Github Actions (scheduled workflows, one per agent)
 - **Memory** — Supabase (Postgres + pgvector) + Voyage AI embeddings
 - **Dashboard** — Retool (v1) → React + TypeScript (v2)
 - **Integrations** — Gmail, Strava, Garmin, Alpha Vantage
@@ -33,7 +33,7 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 
 🚧 Active development — started 6/10/2026
 
-V1 Complete - Finished 6/16/2026
+**V1 Complete** - Finished 6/16/2026, all six agents live on daily schedule
 
 
 
@@ -46,7 +46,22 @@ V1 Complete - Finished 6/16/2026
 - [x] Job scout agent
 - [x] Weekly report agent
 - [x] Github Actions Scheduler
-- [ ] React dashboard (v2)
+      
+---
+
+## Roadmap -v2
+**v1 fixes**
+- [ ] email-triage: tighten urgency criteria — sales emails incorrectly flagged urgent
+- [ ] email-digest: JournalClub.io returns title only — investigate full body extraction
+- [ ] market-report: output cuts off mid-sentence — fix Discord chunking
+- [ ] weekly-report: review week score logic — scoring seems deflated relative to actual week
+
+**New work**
+- [ ] Cost tracking — Claude API spend per agent, per week, total monthly
+- [ ] Data governance layer — Pydantic structured output, eval framework (deterministic + LLM judge), governance enforcement for any future agent that takes external action
+- [ ] Job-scout v2 — vendor API coverage for remaining blocked sites, manual review pass
+- [ ] **Agent 6 — `study-prep`** — interview prep agent for Forward Deployed/Applied AI roles (Palantir, Anduril, Onebrief). Daily vocab/concepts, twice-weekly case scenarios, weekly coding problem, biweekly SQL drill. Own Discord channel. Ships as a one-way generator first; a lightweight local reaction-listener bot may follow later for interactive grading
+- [ ] React dashboard — once the above is stable
 
 ---
 
