@@ -3,7 +3,7 @@ name: health-sync
 on:
   schedule:
     # 13:30 UTC daily (6:30 AM PDT)
-    - cron: "30 13 * * *"
+    - cron: "44 15 * * *  "TESTING
   workflow_dispatch:
 
 jobs:
