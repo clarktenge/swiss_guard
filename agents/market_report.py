@@ -78,6 +78,44 @@ def _fmt_pct(value: float) -> str:
     return f"{'+' if value >= 0 else ''}{value:.2f}%"
 
 
+def _truncate_on_boundary(text: str, limit: int) -> str:
+    """
+    Fit `text` into `limit` characters without cutting mid-sentence.
+
+    Discord hard-caps embed field values at 1024 chars, so when the narrative
+    overflows we must trim it. Rather than slicing blindly (which lands
+    mid-word), break on the last paragraph, then sentence, then word boundary
+    that fits, and append an ellipsis so the reader knows it was shortened.
+    The full untruncated text still lives in result.content.
+    """
+    if len(text) <= limit:
+        return text
+
+    ellipsis = " […]"
+    budget = limit - len(ellipsis)
+    window = text[:budget]
+
+    # Prefer a paragraph break.
+    para = window.rfind("\n\n")
+    if para != -1:
+        return text[:para].rstrip() + ellipsis
+
+    # Otherwise the last sentence-ending punctuation (before a space or newline).
+    sentence_end = max(
+        window.rfind(". "), window.rfind("! "), window.rfind("? "),
+        window.rfind(".\n"), window.rfind("!\n"), window.rfind("?\n"),
+    )
+    if sentence_end != -1:
+        return text[:sentence_end + 1].rstrip() + ellipsis
+
+    # Last resort: the last word boundary so we never split a word.
+    space = window.rfind(" ")
+    if space != -1:
+        return text[:space].rstrip() + ellipsis
+
+    return window.rstrip() + ellipsis
+
+
 def _compute_holding(holding: dict, quote: dict) -> dict:
     """
     Compute all per-holding figures in Python. No LLM involved.
@@ -274,7 +312,7 @@ class MarketReportAgent(BaseAgent):
         if market_context:
             fields.append({
                 "name": "Market context",
-                "value": market_context[:_MAX_FIELD_VALUE],
+                "value": _truncate_on_boundary(market_context, _MAX_FIELD_VALUE),
                 "inline": False,
             })
 

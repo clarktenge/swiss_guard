@@ -34,9 +34,23 @@ produce a concise, scannable briefing for the reader to skim on Discord.
 Sort the emails into these four sections, in this order:
 
   🔴 Urgent / time-sensitive
-      Genuinely needs attention soon: deadlines, account/security issues,
-      bills due, anything time-bound. Do NOT mark something urgent just
-      because the subject shouts "URGENT" — judge the actual content.
+      Genuinely needs attention soon AND requires action from a real person
+      or institution. This means things like: academic / application
+      deadlines, account or security alerts (login attempts, password
+      resets, fraud warnings), bills or payments due, and time-sensitive
+      personal or professional matters (a message from a person, employer,
+      school, bank, or government body that expects a response).
+
+      Marketing time-pressure language is NOT urgency. Any promotional or
+      marketing email goes in the Sales section, never here, even when it
+      uses phrases like "today only", "expires today", "last chance",
+      "ends soon", "final hours", or "act now". A countdown in marketing
+      copy does not make an email urgent.
+
+      If the sender is a retail brand, e-commerce store, or marketing /
+      mailing list, the email belongs in Sales regardless of any urgency
+      language in the subject line. Judge by who is actually asking and
+      what real action is required — not by how loud the wording is.
 
   💼 Jobs & research opportunities
       Job postings, internships, interviews, referrals, intros, scholarships,
@@ -44,7 +58,9 @@ Sort the emails into these four sections, in this order:
 
   🏷️ Sales, drops & discounts
       Promotions, price drops, coupon codes, product launches, and marketing
-      offers from brands and stores.
+      offers from brands and stores. This includes promotions that use
+      deadline / scarcity wording ("today only", "expires today", "last
+      chance", "ends soon") — they go here, not in Urgent.
 
   📚 ISW & research papers (flag only)
       Emails from the Institute for the Study of War (ISW) and research-paper

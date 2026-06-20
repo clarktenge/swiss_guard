@@ -79,17 +79,46 @@ def _decode_base64(data: str) -> str:
     return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
 
 
+# Markers used by some newsletter platforms (e.g. JournalClub.io) in a decoy
+# text/plain part whose only job is to tell the reader to view the HTML
+# version — the real content lives solely in the text/html alternative.
+_PLACEHOLDER_PLAIN_MARKERS = (
+    "viewing the plain text version",
+    "switch to the html version",
+    "plain text cannot display",
+    "not supported by our platform",
+)
+
+
+def _is_placeholder_plain(text: str) -> bool:
+    """
+    Detect a decoy text/plain part that contains no real content and only
+    directs the reader to the HTML version. Requires BOTH a short length AND
+    multiple placeholder phrases, so a legitimately brief plain-text email is
+    never discarded.
+    """
+    lowered = text.lower()
+    hits = sum(marker in lowered for marker in _PLACEHOLDER_PLAIN_MARKERS)
+    return len(text) < 600 and hits >= 2
+
+
 def _extract_plain_text(payload: dict) -> Optional[str]:
     """
     Recursively extract plain text from a Gmail message payload.
     Prefers text/plain. Falls back to text/html stripped of tags.
+
+    Exception: a decoy text/plain part (see _is_placeholder_plain) is skipped
+    so the recursion falls through to the text/html alternative, which carries
+    the actual content for platforms like JournalClub.io.
     """
     mime_type = payload.get("mimeType", "")
 
     if mime_type == "text/plain":
         data = payload.get("body", {}).get("data", "")
         if data:
-            return _decode_base64(data)
+            text = _decode_base64(data)
+            if not _is_placeholder_plain(text):
+                return text
 
     if mime_type == "text/html":
         data = payload.get("body", {}).get("data", "")
