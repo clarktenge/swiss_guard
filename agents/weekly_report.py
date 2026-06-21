@@ -21,6 +21,7 @@ run()'s agent_runs logging, Discord post, and Voyage embedding.)
 import os
 import sys
 import json
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List
 
@@ -119,6 +120,65 @@ class WeeklyReportAgent(BaseAgent):
             for agent_id in SOURCE_AGENTS
         }
 
+    # ── Supabase: read this week's run costs ────────────────────────────────
+
+    def _fetch_cost_summary(self) -> List[Dict]:
+        """
+        Pull the last DAYS_BACK days of agent_runs (every agent, including the
+        ones not in SOURCE_AGENTS) with their stored Claude-cost estimate. On any
+        failure — including the estimated_cost_usd column not existing yet
+        (migration_005 not applied) — log and return [] so the wrap-up still
+        posts, just without a spend section.
+        """
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=DAYS_BACK)
+        ).isoformat()
+        try:
+            return (
+                self.supabase.table("agent_runs")
+                .select("agent_id, estimated_cost_usd")
+                .gte("started_at", cutoff)
+                .execute()
+                .data
+            ) or []
+        except Exception as e:
+            print(f"[{self.agent_id}] cost fetch failed: {e}")
+            return []
+
+    @staticmethod
+    def _format_cost_section(rows: List[Dict]) -> str:
+        """
+        Build the deterministic 💰 spend block from agent_runs rows. Costs are
+        summed straight from the per-run estimated_cost_usd the agents already
+        recorded — Claude is never asked to do this math — so the numbers are
+        exact. Returns "" when there's nothing to report (no runs, or all costs
+        NULL summing to $0), so the caller can skip the section entirely.
+        """
+        if not rows:
+            return ""
+
+        cost_by_agent: Dict[str, float] = defaultdict(float)
+        runs_by_agent: Dict[str, int] = defaultdict(int)
+        for r in rows:
+            agent = r.get("agent_id") or "unknown"
+            cost_by_agent[agent] += float(r.get("estimated_cost_usd") or 0)
+            runs_by_agent[agent] += 1
+
+        total = sum(cost_by_agent.values())
+        total_runs = sum(runs_by_agent.values())
+        if total <= 0:
+            return ""
+
+        lines = ["💰 AGENT SPEND (LAST 7 DAYS)"]
+        for agent in sorted(cost_by_agent, key=lambda a: cost_by_agent[a], reverse=True):
+            runs = runs_by_agent[agent]
+            lines.append(
+                f"• {agent} — ${cost_by_agent[agent]:.4f} "
+                f"({runs} run{'s' if runs != 1 else ''})"
+            )
+        lines.append(f"Total: ${total:.4f} across {total_runs} runs")
+        return "\n".join(lines)
+
     # ── Format the collected outputs for Claude ─────────────────────────────
 
     @staticmethod
@@ -151,12 +211,20 @@ class WeeklyReportAgent(BaseAgent):
         counts = {agent_id: len(week.get(agent_id) or []) for agent_id in SOURCE_AGENTS}
         total_outputs = sum(counts.values())
 
+        # Spend is derived from agent_runs independently of agent_outputs, so
+        # build it once and append it whether or not there were outputs to
+        # summarize (a week of all-errored runs still cost money).
+        cost_section = self._format_cost_section(self._fetch_cost_summary())
+
         if total_outputs == 0:
+            content = (
+                "📋 **Weekly wrap-up** — no agent outputs in the last "
+                f"{DAYS_BACK} days, so there's nothing to summarize this week."
+            )
+            if cost_section:
+                content += "\n\n" + cost_section
             return AgentResult(
-                content=(
-                    "📋 **Weekly wrap-up** — no agent outputs in the last "
-                    f"{DAYS_BACK} days, so there's nothing to summarize this week."
-                ),
+                content=content,
                 metadata={"total_outputs": 0, "counts": counts},
             )
 
@@ -179,8 +247,12 @@ class WeeklyReportAgent(BaseAgent):
         )
 
         header = "📋 **Weekly Wrap-Up**\n\n"
+        content = header + body.strip()
+        if cost_section:
+            content += "\n\n" + cost_section
+
         return AgentResult(
-            content=header + body.strip(),
+            content=content,
             metadata={"total_outputs": total_outputs, "counts": counts},
         )
 

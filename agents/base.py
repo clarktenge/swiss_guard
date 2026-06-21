@@ -14,6 +14,13 @@ from integrations.discord_notify import notify, notify_error
 load_dotenv()
 
 
+# Claude Sonnet pricing (USD per 1M tokens). Used to estimate the cost of each
+# agent run from the token counts accumulated in call_claude(). Keep in sync with
+# the model used in call_claude() ("claude-sonnet-4-6").
+SONNET_INPUT_COST_PER_MTOK = 3.0
+SONNET_OUTPUT_COST_PER_MTOK = 15.0
+
+
 @dataclass
 class AgentResult:
     content: str                          # markdown-formatted output
@@ -41,6 +48,14 @@ class BaseAgent(ABC):
             os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
         )
         self.voyage = voyageai.Client(api_key=os.getenv("VOYAGE_API_KEY", "").strip())
+
+        # Running token totals across every call_claude() in a single run. Some
+        # agents (e.g. job-scout) make several chunked Claude calls per run, so we
+        # accumulate here and read the totals back in run() to compute the cost.
+        # Initialized here so direct execute() previews don't AttributeError;
+        # run() resets them to 0 before each run in case an instance is reused.
+        self.input_tokens = 0
+        self.output_tokens = 0
 
     # ── Abstract interface ─────────────────────────────────────────────────────
 
@@ -74,6 +89,11 @@ class BaseAgent(ABC):
         started_at = datetime.now(timezone.utc).isoformat()
         print(f"[{self.agent_id}] Starting run {run_id[:8]}...")
 
+        # Reset per-run token counters (in case this instance is reused across
+        # runs) so the cost reflects only this run's Claude calls.
+        self.input_tokens = 0
+        self.output_tokens = 0
+
         self.supabase.table("agent_runs").insert({
             "id": run_id,
             "agent_id": self.agent_id,
@@ -97,21 +117,45 @@ class BaseAgent(ABC):
                 "status": "success",
                 "finished_at": finished_at,
                 "latency_ms": latency_ms,
+                "input_tokens": self.input_tokens,
+                "output_tokens": self.output_tokens,
+                "estimated_cost_usd": self._estimated_cost_usd(),
             }).eq("id", run_id).execute()
 
-            print(f"[{self.agent_id}] ✓ Done in {latency_ms}ms")
+            print(
+                f"[{self.agent_id}] ✓ Done in {latency_ms}ms "
+                f"({self.input_tokens} in / {self.output_tokens} out tokens, "
+                f"${self._estimated_cost_usd():.6f})"
+            )
             return result
 
         except Exception as e:
             notify_error(self.agent_id, str(e))
+            # Tokens may have been spent before the failure — record what we used
+            # so the cost report still accounts for failed runs.
             self.supabase.table("agent_runs").update({
                 "status": "error",
                 "finished_at": datetime.now(timezone.utc).isoformat(),
                 "error_message": str(e),
+                "input_tokens": self.input_tokens,
+                "output_tokens": self.output_tokens,
+                "estimated_cost_usd": self._estimated_cost_usd(),
             }).eq("id", run_id).execute()
 
             print(f"[{self.agent_id}] ✗ Failed: {e}")
             raise
+
+    def _estimated_cost_usd(self) -> float:
+        """
+        Estimate this run's Claude cost (USD) from the accumulated token totals,
+        using Sonnet pricing. Rounded to 6 decimals to match the
+        agent_runs.estimated_cost_usd column (numeric(10,6)).
+        """
+        cost = (
+            self.input_tokens / 1_000_000 * SONNET_INPUT_COST_PER_MTOK
+            + self.output_tokens / 1_000_000 * SONNET_OUTPUT_COST_PER_MTOK
+        )
+        return round(cost, 6)
 
     # ── Helpers available to all agents ───────────────────────────────────────
 
@@ -161,6 +205,12 @@ class BaseAgent(ABC):
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
+        # Accumulate token usage across every call in this run (chunked agents
+        # make several calls). run() reads these totals to compute the cost.
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            self.input_tokens += getattr(usage, "input_tokens", 0) or 0
+            self.output_tokens += getattr(usage, "output_tokens", 0) or 0
         # Concatenate every text block rather than assuming content[0] is text.
         # Non-text blocks (e.g. tool_use once tools are added) can appear first
         # or alongside text, and an empty content list would crash on [0].
