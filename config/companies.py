@@ -168,7 +168,7 @@ COMPANIES = [
     },
     {
         "name": "Leidos",
-        "ats": "placeholder",
+        "ats": "custom",
         "search_url": "https://careers.leidos.com/pages/new-graduate-jobs",
         "search_param": "q",
         "priority": "high",
@@ -195,7 +195,7 @@ COMPANIES = [
     },
     {
         "name": "SAIC",
-        "ats": "placeholder",
+        "ats": "custom",
         "search_url": "https://jobs.saic.com/pages/early-career",
         "search_param": "q",
         "priority": "medium",
