@@ -15,7 +15,9 @@ Flow (implemented exactly as specified):
      entry (location → "📍 Multiple locations") before Claude sees it.
   5. Claude judgment (replaces the old keyword filter): hard-rejects (degree/
      experience/seniority/clearance/intern/2026/non-US) plus relevance, returning
-     the survivors with a reason, location, and a perfect_fit flag.
+     the survivors with a reason, location, and a perfect_fit flag. Each job
+     carries its full posting description so the degree / years-of-experience
+     hard rejects — which live in the body, not the title — are actually caught.
   6. Watch list: perfect_fit roles are persisted to watched_jobs (deduped by
      job_id+company) and flagged ⭐ today; every run also re-posts the full
      watch list as 📌 daily reminders.
@@ -25,7 +27,8 @@ Flow (implemented exactly as specified):
 Division of labor: Python owns the facts (US filter, what's new, the counts) and
 all side effects (Supabase, Discord); Claude owns the judgment + rationale.
 
-TEST_MODE limits the scan to a short company list for safe live testing.
+By default every non-placeholder company in config/companies.py is scanned on
+every run; pass an explicit company list to JobScoutAgent to scope a test run.
 
 Run directly to preview against the live boards + Claude WITHOUT posting/writing:
     python agents/job_scout.py
@@ -49,20 +52,17 @@ from integrations.job_boards import fetch_company_jobs            # noqa: E402
 from integrations.discord_notify import notify_raw, notify_error  # noqa: E402
 
 
-# ── Live-test scoping ────────────────────────────────────────────────────────
-# With TEST_MODE on, only TEST_COMPANIES are scanned — a small, safe set for the
-# first end-to-end live run. Flip to False to scan all of COMPANIES.
-TEST_MODE = True
-TEST_COMPANIES = ["Onebrief", "Palantir", "Anduril"]
-
 # Max job_ids per seen_jobs request. A single .in_() with thousands of ids makes
 # a GET URL long enough for PostgREST to 400; batching keeps each request small.
 _SEEN_BATCH = 100
 
 # Jobs per Claude evaluation call. Sending the whole (potentially thousands-long)
 # candidate list in one shot overruns the model's output budget and truncates the
-# JSON reply to nothing; chunking keeps each call's input + output bounded.
-_CLAUDE_CHUNK = 75
+# JSON reply to nothing; chunking keeps each call's input + output bounded. Each
+# job now carries a full description (up to _MAX_DESC_CHARS ≈ 1.3k tokens), so the
+# chunk is much smaller than when only titles were sent — ~15 jobs keeps a chunk's
+# input near 20k tokens.
+_CLAUDE_CHUNK = 15
 
 
 # ── Claude prompts (verbatim from the spec) ──────────────────────────────────
@@ -74,8 +74,24 @@ CLAUDE_SYSTEM = (
     "systems, computer vision, and deep learning. Targeting June 2027 start.\n"
     "Target roles: Outcome Engineer, Forward Deployed Engineer, Applied \n"
     "Scientist, ML Engineer, AI Engineer.\n\n"
-    "HARD REJECTS — return nothing for a job if ANY of these are true:\n"
-    "- Requires a Masters degree, PhD, or 2+ years of experience\n"
+    "Each job object includes a `description` field with the FULL posting text \n"
+    "(requirements, qualifications, etc.). READ IT IN FULL — do not judge from \n"
+    "the title alone. The hard rejects below very often appear ONLY in the \n"
+    "description (e.g. a friendly-sounding title whose qualifications section \n"
+    "demands a Master's or 5+ years). When `description` is empty, judge on the \n"
+    "title alone.\n\n"
+    "HARD REJECTS — return nothing for a job if ANY of these are true. A hard \n"
+    "reject ALWAYS wins: reject no matter how appealing the title sounds.\n"
+    "- The description states a minimum professional/industry experience \n"
+    '  requirement of 2 or more years — e.g. "3+ years," "5+ years industry \n'
+    '  experience," "minimum 4 years," "4+ years professional C++." Reject \n'
+    "  regardless of title appeal. (An entry-level range like \"0–2 years\" is \n"
+    "  fine; a requirement of 2+ years is a reject.)\n"
+    "- The description REQUIRES a Master's degree, PhD, MS, or doctorate — e.g. \n"
+    '  "Master\'s degree required," "MS required," "PhD in...," "requires a \n'
+    '  doctorate." Reject regardless of title appeal. (A Master\'s/PhD listed \n'
+    '  only as "preferred," "a plus," or "or equivalent experience," or a plain \n'
+    "  Bachelor's requirement, is NOT a reject.)\n"
     "- Has senior/staff/principal/lead in the title\n"
     "- Requires ACTIVE TS, TS/SCI, or any clearance above Secret as a \n"
     '  hard requirement ("must have active TS/SCI" = reject; \n'
@@ -102,9 +118,11 @@ CLAUDE_SYSTEM = (
 )
 
 CLAUDE_USER = (
-    "Here are today's new job postings as a JSON array. Evaluate each one "
-    "against the criteria and hard rejects in your instructions, and return "
-    "the JSON array described there."
+    "Here are today's new job postings as a JSON array. Each object includes a "
+    "`description` field — read it in full when judging the hard rejects "
+    "(experience/degree requirements live there, not in the title). Evaluate "
+    "each one against the criteria and hard rejects in your instructions, and "
+    "return the JSON array described there."
 )
 
 
@@ -369,17 +387,17 @@ class JobScoutAgent(BaseAgent):
 
     def __init__(self, companies: Optional[List[Dict]] = None, post: bool = True):
         """
-        companies: company configs to scan. Defaults to COMPANIES, narrowed to
-            TEST_COMPANIES when TEST_MODE is on.
+        companies: company configs to scan. Defaults to EVERY non-placeholder
+            company in COMPANIES (placeholders self-skip in fetch_company_jobs,
+            but excluding them here keeps companies_checked an honest count of
+            boards actually scanned). Pass an explicit list to scope a test run.
         post: when True, matching jobs are posted to #💼-job-scout. When False
             (direct-run preview / tests) messages are printed instead, so
             execute() has no Discord side effects.
         """
         super().__init__()
         if companies is None:
-            companies = COMPANIES
-            if TEST_MODE:
-                companies = [c for c in companies if c["name"] in TEST_COMPANIES]
+            companies = [c for c in COMPANIES if c.get("ats") != "placeholder"]
         self.companies = companies
         self.post = post
 
@@ -469,7 +487,10 @@ class JobScoutAgent(BaseAgent):
 
         payload = [
             {"company": j["company"], "title": j["title"], "url": j["url"],
-             "location": j.get("location") or "Not specified"}
+             "location": j.get("location") or "Not specified",
+             # The posting body is where degree / years-of-experience hard
+             # rejects actually live; the fetchers already bound its length.
+             "description": j.get("description") or ""}
             for j in jobs
         ]
         try:
@@ -685,7 +706,6 @@ class JobScoutAgent(BaseAgent):
                 "perfect_fits": perfect,
                 "watched": len(watched),
                 "matches": matches,
-                "test_mode": TEST_MODE,
             },
         )
 

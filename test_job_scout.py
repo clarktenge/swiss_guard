@@ -10,7 +10,7 @@
 #
 #   2. ⚠️  LIVE smoke tests (opt-in): hit the real job boards, call Claude
 #      (billed), and — via run() — write Supabase rows + post to #💼-job-scout.
-#      Off by default. TEST_MODE in agents/job_scout.py scopes the company list.
+#      Off by default. Scans every non-placeholder company in config/companies.py.
 #
 # Run:  python test_job_scout.py            # offline checks only
 #       python test_job_scout.py preview    # offline + live boards + Claude, NO posting
@@ -120,7 +120,10 @@ class _FakeResp:
 def test_fetch_greenhouse(monkeypatch_get):
     monkeypatch_get(_FakeResp(json_data={
         "jobs": [
-            {"id": 111, "title": "ML Engineer", "absolute_url": "https://gh/111"},
+            # `content` arrives as entity-encoded HTML (Greenhouse's shape); the
+            # fetcher must unescape + strip it to plain text for Claude.
+            {"id": 111, "title": "ML Engineer", "absolute_url": "https://gh/111",
+             "content": "&lt;p&gt;Requires &lt;b&gt;5+ years&lt;/b&gt; experience.&lt;/p&gt;"},
             {"id": 222, "title": "", "absolute_url": "https://gh/222"},  # dropped: no title
         ]
     }))
@@ -129,25 +132,33 @@ def test_fetch_greenhouse(monkeypatch_get):
     assert out[0] == {
         "job_id": "111", "title": "ML Engineer", "url": "https://gh/111",
         "company": "Anduril", "source": "greenhouse",
+        "description": "Requires 5+ years experience.",
     }
-    print("✓ fetch_greenhouse: parses jobs, drops incomplete rows")
+    print("✓ fetch_greenhouse: parses jobs, strips entity-encoded content, drops incomplete rows")
 
 
 def test_fetch_lever(monkeypatch_get):
     monkeypatch_get(_FakeResp(json_data=[
-        {"id": "abc", "text": "Forward Deployed Engineer", "hostedUrl": "https://lever/abc"},
+        {"id": "abc", "text": "Forward Deployed Engineer", "hostedUrl": "https://lever/abc",
+         "descriptionPlain": "Deploy alongside customers.",
+         # The hard-reject-bearing requirements live in `lists`, not in
+         # descriptionPlain — the fetcher must stitch them in.
+         "lists": [{"text": "Requirements", "content": "<li>3+ years experience</li>"}]},
     ]))
     out = jb.fetch_lever({"name": "Palantir", "slug": "palantir"})
     assert out[0]["job_id"] == "abc"
     assert out[0]["title"] == "Forward Deployed Engineer"
     assert out[0]["source"] == "lever"
-    print("✓ fetch_lever: parses postings list")
+    assert "Deploy alongside customers." in out[0]["description"]
+    assert "Requirements" in out[0]["description"] and "3+ years" in out[0]["description"]
+    print("✓ fetch_lever: parses postings list, stitches requirement lists into description")
 
 
 def test_fetch_ashby(monkeypatch_get):
     monkeypatch_get(_FakeResp(json_data={
         "jobs": [
-            {"id": "j1", "title": "Outcome Engineer", "jobUrl": "https://ashby/j1", "isListed": True},
+            {"id": "j1", "title": "Outcome Engineer", "jobUrl": "https://ashby/j1",
+             "isListed": True, "descriptionPlain": "Own outcomes. Master's degree required."},
             {"id": "j2", "title": "Hidden", "jobUrl": "https://ashby/j2", "isListed": False},  # dropped
         ]
     }))
@@ -156,7 +167,8 @@ def test_fetch_ashby(monkeypatch_get):
     assert out[0]["job_id"] == "j1"
     assert out[0]["url"] == "https://ashby/j1"
     assert out[0]["source"] == "ashby"
-    print("✓ fetch_ashby: parses jobs list, skips unlisted")
+    assert out[0]["description"] == "Own outcomes. Master's degree required."
+    print("✓ fetch_ashby: parses jobs list, skips unlisted, carries description")
 
 
 # ── Part 1c-bis: vendor JSON fetchers behind custom portals ──────────────────
@@ -395,7 +407,7 @@ def run_preview():
 def run_live():
     """Full pipeline: live boards + Claude + Discord post + Supabase logging."""
     print("\n⚠️  Running LIVE job-scout (boards + Claude + Discord + Supabase)…\n")
-    agent = JobScoutAgent()  # post=True; TEST_MODE scopes the company list
+    agent = JobScoutAgent()  # post=True; scans all non-placeholder companies
     result = agent.run()
     if result is None:
         print("run() returned no result")

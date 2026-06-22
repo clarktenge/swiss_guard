@@ -12,7 +12,11 @@
 #   greenhouse  → JSON API via boards.greenhouse.io
 #   lever       → JSON API via api.lever.co
 #   ashby       → JSON API via jobs.ashbyhq.com
-#   custom      → HTML scraping via BeautifulSoup
+#   custom      → career portal with no first-party ATS. integrations/job_boards.py
+#                 maps the site's host to the real recruiting platform behind it
+#                 (Workday / Phenom / Eightfold sitemap / …) and falls back to a
+#                 best-effort HTML scrape for unmapped hosts. search_url's host is
+#                 what drives that routing — keep it accurate.
 #   placeholder → Inactive or unconfirmed — logged and skipped
 
 COMPANIES = [
@@ -154,24 +158,6 @@ COMPANIES = [
                          "machine learning"],
     },
     {
-        "name": "JHU APL",
-        "ats": "custom",
-        "search_url": "https://careers.jhuapl.edu/jobs",
-        "search_param": "keyword",
-        "priority": "high",
-        "target_roles": ["data scientist", "ml engineer", "applied scientist",
-                         "machine learning"],
-    },
-    {
-        "name": "MIT Lincoln Lab",
-        "ats": "custom",
-        "search_url": "https://careers.ll.mit.edu/search",
-        "search_param": "q",
-        "priority": "high",
-        "target_roles": ["data scientist", "ml engineer", "applied scientist",
-                         "machine learning"],
-    },
-    {
         "name": "CACI",
         "ats": "custom",
         "search_url": "https://searchcareers.caci.com/careers",
@@ -182,8 +168,8 @@ COMPANIES = [
     },
     {
         "name": "Leidos",
-        "ats": "custom",
-        "search_url": "https://careers.leidos.com/search/jobs",
+        "ats": "placeholder",
+        "search_url": "https://careers.leidos.com/pages/new-graduate-jobs",
         "search_param": "q",
         "priority": "high",
         "target_roles": ["data scientist", "ml engineer", "applied scientist",
@@ -192,7 +178,7 @@ COMPANIES = [
     {
         "name": "Northrop Grumman",
         "ats": "custom",
-        "search_url": "https://jobs.northropgrumman.com/careers",
+        "search_url": "https://jobs.northropgrumman.com/careers?domain=ngc.com&query=associate",
         "search_param": "q",
         "priority": "high",
         "target_roles": ["data scientist", "ml engineer", "applied scientist",
@@ -209,8 +195,8 @@ COMPANIES = [
     },
     {
         "name": "SAIC",
-        "ats": "custom",
-        "search_url": "https://jobs.saic.com/search/jobs",
+        "ats": "placeholder",
+        "search_url": "https://jobs.saic.com/pages/early-career",
         "search_param": "q",
         "priority": "medium",
         "target_roles": ["data scientist", "ml engineer", "applied scientist",
