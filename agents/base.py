@@ -57,6 +57,12 @@ class BaseAgent(ABC):
         self.input_tokens = 0
         self.output_tokens = 0
 
+        # Tier 1/2 eval check results for the current run. Agents that eval
+        # their output populate this during execute() (list of
+        # {"check","passed","message"} dicts); run() persists it after
+        # _save_output(). Stays empty for agents that don't eval.
+        self._eval_results: list = []
+
     # ── Abstract interface ─────────────────────────────────────────────────────
 
     @property
@@ -111,6 +117,15 @@ class BaseAgent(ABC):
             )
 
             self._save_output(run_id, result)
+
+            # Eval hook: agents that run Tier 1/2 checks during execute() stash
+            # the results on self._eval_results; we persist them here so the
+            # logging path stays in one place. Agents that don't eval set
+            # nothing and this is a no-op. (See evals/checks.py, evals/logger.py.)
+            if self._eval_results:
+                from evals.logger import log_eval_results
+                log_eval_results(run_id, self.agent_id, self._eval_results)
+
             notify(self.agent_id, result.content, embed=result.embed)
 
             self.supabase.table("agent_runs").update({
