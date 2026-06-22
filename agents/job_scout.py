@@ -94,19 +94,42 @@ def _passes_us_filter(job: Dict) -> bool:
     return False
 
 
-# ── Filter 2: entry-level keyword on the title ───────────────────────────────
-_ENTRY_LEVEL_KEYWORDS = (
-    "new grad", "new graduate", "entry", "associate", "junior", "early career",
-    "university", "campus", "software engineer", "data scientist",
-    "machine learning", "ml engineer", "ai engineer", "forward deployed",
-    "applied scientist", "outcome engineer",
+# ── Filter 2: title relevance ────────────────────────────────────────────────
+# Hard reject FIRST: any of these substrings in the title disqualifies the role
+# outright (senior/lead/management/advanced-degree/intern signals). This runs
+# before the relevance check, so "Senior Machine Learning Engineer" is rejected
+# even though its title also matches a relevance phrase.
+_HARD_REJECT_KEYWORDS = (
+    "sr.", "sr ", "senior", "staff", "director", "head of",
+    "vp ", "vice president", "architect", "postdoc", "postdoctoral",
+    "intern", "co-op", "internship", "phd", "ph.d",
+)
+
+# Relevance: a title is kept only if it contains at least one of these exact
+# phrases (case-insensitive). Full phrases ONLY — no bare "engineer", which
+# would wrongly catch "sales engineer" / "reliability engineer".
+_RELEVANCE_KEYWORDS = (
+    "software engineer", "data scientist", "machine learning",
+    "ml engineer", "ai engineer", "forward deployed",
+    "applied scientist", "outcome engineer", "data engineer",
+    "research engineer", "computer vision", "nlp engineer",
+    "intelligence analyst", "systems engineer", "associate engineer",
+    "associate scientist", "associate analyst", "new grad",
+    "new graduate", "entry level", "early career", "junior",
+    "university graduate", "campus hire",
 )
 
 
-def _passes_entry_level_filter(job: Dict) -> bool:
-    """True if the job title contains any entry-level / target-role keyword."""
+def _passes_title_filter(job: Dict) -> bool:
+    """
+    True if the job title clears the hard-reject list AND contains at least one
+    relevance phrase. Hard reject runs first: a title carrying "senior"/"staff"/
+    etc. is dropped even when it also matches a relevance term.
+    """
     title = (job.get("title") or "").lower()
-    return any(kw in title for kw in _ENTRY_LEVEL_KEYWORDS)
+    if any(bad in title for bad in _HARD_REJECT_KEYWORDS):
+        return False
+    return any(kw in title for kw in _RELEVANCE_KEYWORDS)
 
 
 # ── Multi-location dedup ─────────────────────────────────────────────────────
@@ -342,10 +365,11 @@ class JobScoutAgent(BaseAgent):
                 continue
             jobs_scanned += len(jobs)
 
-            # STEP 2 — two Python filters: US-based, then entry-level title.
+            # STEP 2 — two Python filters: US-based, then title (hard-reject
+            # first, then relevance).
             candidates = [
                 j for j in jobs
-                if _passes_us_filter(j) and _passes_entry_level_filter(j)
+                if _passes_us_filter(j) and _passes_title_filter(j)
             ]
 
             # STEP 3 — new vs. seen; record every new posting immediately.
