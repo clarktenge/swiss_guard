@@ -83,7 +83,7 @@ class BaseAgent(ABC):
 
     def run(self) -> Optional[AgentResult]:
         """
-        Called by n8n (or manually). Do not override this.
+        Called by github actions (or manually). Do not override this.
 
         Handles:
           - Logging the run to Supabase before and after

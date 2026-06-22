@@ -75,9 +75,9 @@ COMPANIES = [
         "target_roles": [],
     },
     {
-        "name": "Govini",
-        "ats": "greenhouse",
-        "slug": "govini",
+        "name": "Air",
+        "ats": "ashby",
+        "slug": "air",
         "priority": "high",
         "target_roles": [],
     },
