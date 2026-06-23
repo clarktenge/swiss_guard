@@ -9,7 +9,7 @@ from anthropic import Anthropic
 from supabase import create_client, Client
 import voyageai
 from dotenv import load_dotenv
-from integrations.discord_notify import notify, notify_error
+from integrations.discord_notify import notify, notify_raw, notify_error
 
 load_dotenv()
 
@@ -27,6 +27,9 @@ class AgentResult:
     metadata: dict = field(default_factory=dict)  # can store extra any data
     embed: Optional[dict] = None          # optional Discord embed payload; if set,
                                           # run() posts this instead of plain content
+    followup: Optional[str] = None        # optional plain-text message posted to
+                                          # Discord after the embed (for content
+                                          # too long for an embed field)
 
 
 class BaseAgent(ABC):
@@ -127,6 +130,11 @@ class BaseAgent(ABC):
                 log_eval_results(run_id, self.agent_id, self._eval_results)
 
             notify(self.agent_id, result.content, embed=result.embed)
+
+            # Some agents (market-report) attach a long narrative that doesn't
+            # fit an embed field; post it as a chunked plain-text follow-up.
+            if result.followup:
+                notify_raw(self.agent_id, result.followup)
 
             self.supabase.table("agent_runs").update({
                 "status": "success",

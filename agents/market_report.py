@@ -59,9 +59,8 @@ the context paragraphs. Output GitHub-flavored markdown, no code fences.
 _COLOR_GREEN = 0x2ECC71
 _COLOR_RED = 0xE74C3C
 
-# Discord caps embeds at 25 fields and 1024 chars per field value.
+# Discord caps embeds at 25 fields.
 _MAX_EMBED_FIELDS = 25
-_MAX_FIELD_VALUE = 1024
 
 
 def _fmt_money(value: float) -> str:
@@ -76,44 +75,6 @@ def _fmt_signed_money(value: float) -> str:
 
 def _fmt_pct(value: float) -> str:
     return f"{'+' if value >= 0 else ''}{value:.2f}%"
-
-
-def _truncate_on_boundary(text: str, limit: int) -> str:
-    """
-    Fit `text` into `limit` characters without cutting mid-sentence.
-
-    Discord hard-caps embed field values at 1024 chars, so when the narrative
-    overflows we must trim it. Rather than slicing blindly (which lands
-    mid-word), break on the last paragraph, then sentence, then word boundary
-    that fits, and append an ellipsis so the reader knows it was shortened.
-    The full untruncated text still lives in result.content.
-    """
-    if len(text) <= limit:
-        return text
-
-    ellipsis = " […]"
-    budget = limit - len(ellipsis)
-    window = text[:budget]
-
-    # Prefer a paragraph break.
-    para = window.rfind("\n\n")
-    if para != -1:
-        return text[:para].rstrip() + ellipsis
-
-    # Otherwise the last sentence-ending punctuation (before a space or newline).
-    sentence_end = max(
-        window.rfind(". "), window.rfind("! "), window.rfind("? "),
-        window.rfind(".\n"), window.rfind("!\n"), window.rfind("?\n"),
-    )
-    if sentence_end != -1:
-        return text[:sentence_end + 1].rstrip() + ellipsis
-
-    # Last resort: the last word boundary so we never split a word.
-    space = window.rfind(" ")
-    if space != -1:
-        return text[:space].rstrip() + ellipsis
-
-    return window.rstrip() + ellipsis
 
 
 def _compute_holding(holding: dict, quote: dict) -> dict:
@@ -255,12 +216,20 @@ class MarketReportAgent(BaseAgent):
             day_pnl_pct=day_pnl_pct,
             total_pnl=total_pnl,
             total_pnl_pct=total_pnl_pct,
-            market_context=market_context,
+        )
+
+        # Post the narrative as its own plain-text message after the embed. It
+        # commonly runs past Discord's 1024-char embed-field cap, so keeping it
+        # out of the embed avoids the mid-report "[…]" clipping; notify_raw
+        # chunks it on paragraph boundaries (well under the 2000-char limit).
+        followup = (
+            f"📊 **Market context**\n\n{market_context}" if market_context else None
         )
 
         return AgentResult(
             content=content,
             embed=embed,
+            followup=followup,
             metadata={
                 "holding_count": len(holdings),
                 "priced_count": len(rows),
@@ -279,7 +248,6 @@ class MarketReportAgent(BaseAgent):
         day_pnl_pct: float,
         total_pnl: float,
         total_pnl_pct: float,
-        market_context: str,
     ) -> dict:
         """
         Build the Discord embed payload. Pure formatting of pre-computed numbers
@@ -306,15 +274,11 @@ class MarketReportAgent(BaseAgent):
             for r in sorted(rows, key=lambda x: x["market_value"], reverse=True)
         ]
 
-        # Keep one slot for the market-context field below, and stay within
-        # Discord's 25-field cap.
-        fields = fields[: _MAX_EMBED_FIELDS - 1]
-        if market_context:
-            fields.append({
-                "name": "Market context",
-                "value": _truncate_on_boundary(market_context, _MAX_FIELD_VALUE),
-                "inline": False,
-            })
+        # Stay within Discord's 25-field cap (one field per holding). The market
+        # context narrative is posted separately as a plain-text follow-up
+        # message (see run()), so it doesn't get clipped to the 1024-char
+        # embed-field limit.
+        fields = fields[:_MAX_EMBED_FIELDS]
 
         return {
             "title": f"Market Report — {datetime.now():%B} {datetime.now().day}",
