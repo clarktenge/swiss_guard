@@ -2,9 +2,11 @@
 email_triage — pulls the last 24h of mail, asks Claude to categorize it, and
 returns clean markdown ready to post to Discord.
 
-This is the simple version: no Pydantic schema, no eval checks, no governance.
-Claude reads the batch and writes the briefing markdown directly; we just wrap
-the email content as untrusted data and post the result.
+Governance Phase 2: Claude now returns a structured TriageOutput (Pydantic)
+rather than free-form markdown. We validate that JSON, run the Tier 1 eval
+checks against it (evals/checks.py), then render it to the same human-readable
+markdown for Discord. The structured object is saved separately
+(AgentResult.structured_output) so the eval layer has typed data to assert on.
 
 Run it directly to triage your live inbox and print the briefing:
 
@@ -23,6 +25,8 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.base import BaseAgent, AgentResult            # noqa: E402
+from agents.schemas import TriageOutput                    # noqa: E402
+from evals.checks import run_all_checks                    # noqa: E402
 from integrations.gmail import list_recent_emails          # noqa: E402
 
 
@@ -79,16 +83,77 @@ Rules:
     either a named bucket (urgent, opportunities, sales) or uncategorized.
     Never silently drop an email; if it doesn't fit a named bucket, it belongs
     in uncategorized.
-  - Only include a section if it has at least one email. Omit empty sections
-    entirely (no "None" placeholders).
-  - Under each section, use a markdown bullet per email: the subject in bold,
-    then the sender, then a brief (≤ 12 word) note on why it matters. For the
-    opportunities bucket, ISW / research-paper items only need sender +
-    subject — skip the "why it matters" note for those.
-  - Keep it tight and skimmable. No preamble, no sign-off, no "here is your
-    briefing" — start directly with the first section heading.
-  - Output GitHub-flavored markdown only. Do not wrap it in code fences.
-"""
+  - For each item, the "reason" is one brief (≤ 12 word) note on why it's in
+    that bucket. For the opportunities bucket, ISW / research-paper items can
+    use a short sender/subject-based reason — they're flagged, not summarized.
+  - "confidence" is your 0.0–1.0 certainty that the item belongs in its bucket.
+
+Respond with valid JSON only. No prose before or after.
+Your response must match this exact structure:
+{
+  "urgent": [...],
+  "opportunities": [...],
+  "sales": [...],
+  "uncategorized": [...]
+}
+Each item must have: email_id, from_, subject, reason, confidence (0.0-1.0).
+Sales items also need: brand, expires_at (or null).
+Every input email_id must appear in exactly one bucket."""
+
+
+# ── Rendering / parsing helpers ──────────────────────────────────────────────
+
+def _strip_code_fences(text: str) -> str:
+    """
+    Defensively unwrap a ```json … ``` (or bare ``` … ```) fence if Claude adds
+    one despite being asked for raw JSON. Leaves clean JSON untouched.
+    """
+    s = text.strip()
+    if s.startswith("```"):
+        # Drop the opening fence line (``` or ```json) and the trailing fence.
+        s = s.split("\n", 1)[1] if "\n" in s else s
+        if s.rstrip().endswith("```"):
+            s = s.rstrip()[: -len("```")]
+    return s.strip()
+
+
+# Sections in display order, with the emoji headings the briefing has always
+# used. Each entry is (heading, attribute name on TriageOutput).
+_SECTIONS = (
+    ("🔴 Urgent", "urgent"),
+    ("💼 Opportunities", "opportunities"),
+    ("🏷️ Sales", "sales"),
+    ("📦 Uncategorized", "uncategorized"),
+)
+
+
+def _format_for_discord(output: TriageOutput) -> str:
+    """
+    Render a validated TriageOutput into the scannable markdown briefing posted
+    to Discord. Preserves the existing emoji/section structure: a bold heading
+    per non-empty bucket, then one bullet per email (subject in bold, sender,
+    and the short reason). Empty buckets are omitted.
+    """
+    total = sum(len(getattr(output, attr)) for _, attr in _SECTIONS)
+    lines = [f"📬 **Email triage** — {total} emails in the last 24h", ""]
+
+    for heading, attr in _SECTIONS:
+        items = getattr(output, attr)
+        if not items:
+            continue
+        lines.append(f"**{heading}**")
+        for item in items:
+            # Sales items carry a brand (and maybe an expiry) worth surfacing.
+            brand = getattr(item, "brand", None)
+            expires_at = getattr(item, "expires_at", None)
+            sender = f"{brand} · {item.from_}" if brand else item.from_
+            note = item.reason
+            if expires_at:
+                note = f"{note} (expires {expires_at})"
+            lines.append(f"- **{item.subject}** — {sender} · {note}")
+        lines.append("")
+
+    return "\n".join(lines).strip()
 
 
 class EmailTriageAgent(BaseAgent):
@@ -98,6 +163,9 @@ class EmailTriageAgent(BaseAgent):
         return "email-triage"
 
     def execute(self) -> AgentResult:
+        # Step 1: fetch the batch and remember every input id up front. The
+        # conservation check (evals/checks.py) compares these against the ids
+        # Claude returns, so we capture them before the model sees anything.
         emails = list_recent_emails(hours_back=24)
 
         if not emails:
@@ -106,11 +174,15 @@ class EmailTriageAgent(BaseAgent):
                 metadata={"input_count": 0},
             )
 
+        input_email_ids = [e["id"] for e in emails]
+
         # Compact, data-only view for the model. from/subject/snippet are
         # attacker-controlled, so this whole blob goes in as untrusted_data
-        # (see the prompt-injection note in BaseAgent.call_claude).
+        # (see the prompt-injection note in BaseAgent.call_claude). email_id is
+        # included so Claude can echo each id back into the right bucket.
         batch = [
             {
+                "email_id": e["id"],
                 "from": e["from"],
                 "subject": e["subject"],
                 "snippet": e.get("snippet", ""),
@@ -118,20 +190,46 @@ class EmailTriageAgent(BaseAgent):
             for e in emails
         ]
 
-        body = self.call_claude(
+        # Step 2: ask for JSON (the structure is spelled out in SYSTEM_PROMPT).
+        response_text = self.call_claude(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=(
-                f"Triage these {len(emails)} emails and write the briefing "
-                "markdown described in your instructions, and nothing else."
+                f"Triage these {len(emails)} emails and return the JSON object "
+                "described in your instructions, and nothing else."
             ),
             untrusted_data=json.dumps(batch, ensure_ascii=False, indent=2),
             max_tokens=4096,
         )
 
-        header = f"📬 **Email triage** — {len(emails)} emails in the last 24h\n\n"
+        # Step 3: parse into the typed contract. A failure here means Claude
+        # returned something off-shape; raise so base.py run() marks the run as
+        # error rather than silently posting garbage.
+        cleaned = _strip_code_fences(response_text)
+        try:
+            triage_output = TriageOutput.model_validate_json(cleaned)
+        except Exception as e:
+            raise ValueError(
+                f"email-triage: Claude response failed TriageOutput validation: {e}\n"
+                f"Raw response (first 500 chars): {cleaned[:500]}"
+            ) from e
+
+        # Step 4: run the Tier 1 deterministic checks and stash the results so
+        # base.py run() persists them via log_eval_results() after _save_output.
+        eval_results = run_all_checks(triage_output, input_email_ids)
+        self._eval_results = eval_results
+
+        # Step 5: render the typed object to the same human-readable markdown.
+        content = _format_for_discord(triage_output)
+
+        # Step 6: hand back both the markdown (for Discord) and the structured
+        # object (for the eval layer / agent_outputs.structured_output).
         return AgentResult(
-            content=header + body.strip(),
-            metadata={"input_count": len(emails)},
+            content=content,
+            structured_output=triage_output.model_dump(),
+            metadata={
+                "email_count": len(emails),
+                "eval_passed": all(r["passed"] for r in eval_results),
+            },
         )
 
 

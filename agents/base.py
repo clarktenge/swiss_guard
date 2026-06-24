@@ -30,6 +30,11 @@ class AgentResult:
     followup: Optional[str] = None        # optional plain-text message posted to
                                           # Discord after the embed (for content
                                           # too long for an embed field)
+    structured_output: Optional[dict] = None  # optional typed output (e.g. a
+                                          # Pydantic model_dump) saved to the
+                                          # agent_outputs.structured_output jsonb
+                                          # column for evaluation; None for agents
+                                          # that only produce markdown
 
 
 class BaseAgent(ABC):
@@ -298,5 +303,6 @@ class BaseAgent(ABC):
             "content": result.content,
             "embedding": embedding,
             "metadata": result.metadata,
+            "structured_output": result.structured_output,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
