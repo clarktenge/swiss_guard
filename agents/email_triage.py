@@ -28,6 +28,7 @@ from agents.base import BaseAgent, AgentResult            # noqa: E402
 from agents.schemas import TriageOutput                    # noqa: E402
 from evals.checks import run_all_checks                    # noqa: E402
 from integrations.gmail import list_recent_emails          # noqa: E402
+from integrations.discord_notify import notify_error       # noqa: E402
 
 
 SYSTEM_PROMPT = """\
@@ -117,6 +118,44 @@ def _strip_code_fences(text: str) -> str:
     return s.strip()
 
 
+def _clean_json_response(text: str) -> str:
+    """
+    Trim anything Claude tucked outside the JSON object — a stray sentence
+    before the opening brace or a sign-off after the closing one — so
+    model_validate_json sees only the object. Run after _strip_code_fences.
+    Leaves the text untouched if it can't find a brace pair to slice on.
+    """
+    if "{" in text and "}" in text:
+        text = text[text.index("{"): text.rindex("}") + 1]
+    return text.strip()
+
+
+def _sanitize_email(email: dict) -> dict:
+    """
+    Scrub the attacker-controlled string fields (from/subject/snippet) of
+    characters that corrupt a JSON string before they reach Claude. Real
+    inbox subjects carry stray double quotes, backslashes, newlines, and
+    control characters that break the prompt's JSON blob — and, downstream,
+    the model's echo of it. Returns a new dict; the original is left intact.
+    """
+    def clean(value: str) -> str:
+        value = value.replace('"', "'").replace("\\", "/")
+        value = value.replace("\n", " ").replace("\r", " ").replace("\t", " ")
+        # Drop any remaining control characters (ord < 32).
+        return "".join(ch for ch in value if ord(ch) >= 32)
+
+    cleaned = dict(email)
+    # Handle both "from" (raw Gmail key) and "from_" defensively.
+    for key in ("from", "from_", "subject", "snippet"):
+        if isinstance(cleaned.get(key), str):
+            cleaned[key] = clean(cleaned[key])
+    if isinstance(cleaned.get("subject"), str):
+        cleaned["subject"] = cleaned["subject"][:200]
+    if isinstance(cleaned.get("snippet"), str):
+        cleaned["snippet"] = cleaned["snippet"][:300]
+    return cleaned
+
+
 # Sections in display order, with the emoji headings the briefing has always
 # used. Each entry is (heading, attribute name on TriageOutput).
 _SECTIONS = (
@@ -189,12 +228,14 @@ class EmailTriageAgent(BaseAgent):
         # (see the prompt-injection note in BaseAgent.call_claude). email_id is
         # included so Claude can echo each id back into the right bucket.
         batch = [
-            {
-                "email_id": e["id"],
-                "from": e["from"],
-                "subject": e["subject"],
-                "snippet": e.get("snippet", ""),
-            }
+            _sanitize_email(
+                {
+                    "email_id": e["id"],
+                    "from": e["from"],
+                    "subject": e["subject"],
+                    "snippet": e.get("snippet", ""),
+                }
+            )
             for e in emails
         ]
 
@@ -214,7 +255,7 @@ class EmailTriageAgent(BaseAgent):
         # Step 3: parse into the typed contract. A failure here means Claude
         # returned something off-shape; raise so base.py run() marks the run as
         # error rather than silently posting garbage.
-        cleaned = _strip_code_fences(response_text)
+        cleaned = _clean_json_response(_strip_code_fences(response_text))
         try:
             triage_output = TriageOutput.model_validate_json(cleaned)
         except Exception as e:
@@ -224,6 +265,14 @@ class EmailTriageAgent(BaseAgent):
             hint = (
                 " (response appears truncated — increase max_tokens or reduce batch)"
                 if truncated else ""
+            )
+            # Surface the full raw response (not just a 500-char head) to the
+            # agent-logs channel so we can see exactly which character broke the
+            # JSON. notify_error caps at Discord's limit; cap here too to match.
+            notify_error(
+                "email-triage",
+                f"TriageOutput validation failed{hint}: {e}\n"
+                f"Raw response:\n{response_text[:1800]}",
             )
             raise ValueError(
                 f"email-triage: Claude response failed TriageOutput validation{hint}: {e}\n"
