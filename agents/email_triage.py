@@ -174,6 +174,14 @@ class EmailTriageAgent(BaseAgent):
                 metadata={"input_count": 0},
             )
 
+        # Cap the batch so the JSON response can't outgrow Claude's output
+        # budget: ~150 tokens per item means a big inbox would truncate the
+        # response mid-string and fail to parse. Cap before computing
+        # input_email_ids so the conservation check only expects ids Claude saw.
+        if len(emails) > 75:
+            print(f"[email-triage] Capped batch from {len(emails)} to 75 emails")
+            emails = emails[:75]
+
         input_email_ids = [e["id"] for e in emails]
 
         # Compact, data-only view for the model. from/subject/snippet are
@@ -198,7 +206,9 @@ class EmailTriageAgent(BaseAgent):
                 "described in your instructions, and nothing else."
             ),
             untrusted_data=json.dumps(batch, ensure_ascii=False, indent=2),
-            max_tokens=4096,
+            # Override the base default (4096): a batch of JSON triage items
+            # needs a larger output budget or the response truncates mid-string.
+            max_tokens=8192,
         )
 
         # Step 3: parse into the typed contract. A failure here means Claude
@@ -208,8 +218,15 @@ class EmailTriageAgent(BaseAgent):
         try:
             triage_output = TriageOutput.model_validate_json(cleaned)
         except Exception as e:
+            # A response cut off by max_tokens won't end in the closing brace;
+            # point at the budget rather than the schema so the fix is obvious.
+            truncated = len(cleaned) > 100 and not cleaned.rstrip().endswith("}")
+            hint = (
+                " (response appears truncated — increase max_tokens or reduce batch)"
+                if truncated else ""
+            )
             raise ValueError(
-                f"email-triage: Claude response failed TriageOutput validation: {e}\n"
+                f"email-triage: Claude response failed TriageOutput validation{hint}: {e}\n"
                 f"Raw response (first 500 chars): {cleaned[:500]}"
             ) from e
 
