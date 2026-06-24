@@ -12,7 +12,7 @@ Run it directly to preview the report without side effects:
 
     python agents/market_report.py
 
-That calls execute() only — it hits Alpha Vantage and Claude but skips run()'s
+That calls execute() only — it hits yfinance and Claude but skips run()'s
 side effects (Supabase logging, Discord post, Voyage embedding).
 """
 
@@ -132,7 +132,7 @@ class MarketReportAgent(BaseAgent):
 
         tickers = [h["ticker"] for h in holdings]
 
-        # 2. Fetch live quotes + news from Alpha Vantage.
+        # 2. Fetch live quotes + news from yfinance.
         quotes = fetch_quotes(tickers)
         news = fetch_news(tickers, limit=10)
 
@@ -147,7 +147,7 @@ class MarketReportAgent(BaseAgent):
             return AgentResult(
                 content=(
                     "📊 **Market report** — couldn't fetch live quotes for any "
-                    "holding (Alpha Vantage may be rate-limited). Try again later."
+                    "holding (yfinance may be rate-limited). Try again later."
                 ),
                 metadata={"holding_count": len(holdings), "priced_count": 0},
             )

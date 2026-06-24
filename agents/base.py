@@ -252,7 +252,8 @@ class BaseAgent(ABC):
         relevant to the query. Injected into the prompt for continuity.
 
         Returns a formatted string ready to paste into a system prompt.
-        Falls back to most recent outputs if embeddings aren't set up yet.
+        If embedding or the similarity lookup fails, returns
+        "No prior context available." — there is no most-recent-outputs fallback.
         """
         try:
             embedding = self.voyage.embed(

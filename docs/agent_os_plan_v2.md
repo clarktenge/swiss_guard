@@ -51,7 +51,7 @@
 | Strava            | Strava OAuth API        | One-time setup, straightforward                                     |
 | Garmin            | Garmin Health API       | Requires developer account (free). Worth setting up in week 4.     |
 | Apple Health      | XML export → Supabase   | Export weekly, upload to Supabase storage, agent parses it         |
-| Stock data        | Alpha Vantage (free)    | 25 req/day on free tier — enough for daily reports                 |
+| Stock data        | yfinance                | Free quotes + news, enough for daily reports                       |
 
 
 ---
@@ -84,7 +84,7 @@
 
 **What it does:**
 - Pulls your portfolio from Supabase
-- Fetches live quotes and news via Alpha Vantage
+- Fetches live quotes and news via yfinance
 - Synthesizes P&L, competitor moves, macro context, forward signals
 
 ---
@@ -151,7 +151,7 @@ Before the next run, retrieve semantically relevant past outputs and inject them
 
 - [ ] Create GitHub repo 
 - [ ] Write a one-page architecture doc in the repo —  decisions and why
-- [ ] Sign up for: Supabase, n8n cloud (free tier), Voyage AI, Alpha Vantage
+- [ ] Sign up for: Supabase, n8n cloud (free tier), Voyage AI, yfinance
 - [ ] Set up Google Cloud project, enable Gmail + Calendar APIs, get OAuth credentials
 - [ ] Set up Strava developer app, get client ID + secret
 - [ ] Write `.env.example` with every key needed
@@ -194,7 +194,7 @@ Before the next run, retrieve semantically relevant past outputs and inject them
 **Goal:** End-of-day market report with your real holdings.
 
 - [ ] Add holdings table to Supabase
-- [ ] Build Alpha Vantage integration
+- [ ] Build yfinance integration
 - [ ] Build `market-report` agent — tool chaining, structured output
 - [ ] Set up n8n 5 PM weekday schedule
 - [ ] Add portfolio CRUD to Retool — add/remove positions

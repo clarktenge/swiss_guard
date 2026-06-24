@@ -52,7 +52,7 @@ changes behavior — I can only claim it retrieves.
 ## market-report
 
 **What it does.** End-of-day portfolio summary. Pulls holdings from Supabase,
-quotes and news from Alpha Vantage, synthesizes a report. The defining risk here
+quotes and news from yfinance, synthesizes a report. The defining risk here
 is different from the email agents: the numbers have to be *right*, and an LLM is
 bad at arithmetic.
 

@@ -25,7 +25,7 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 - **Orchestration** — Github Actions (scheduled workflows, one per agent)
 - **Memory** — Supabase (Postgres + pgvector) + Voyage AI embeddings
 - **Dashboard** — Retool (v1) → React + TypeScript (v2)
-- **Integrations** — Gmail, Strava, Garmin, Alpha Vantage
+- **Integrations** — Gmail, Strava, Garmin, yfinance
 
 ---
 

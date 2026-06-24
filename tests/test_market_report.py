@@ -100,17 +100,18 @@ def test_build_embed_colors_and_fields():
     ]
     agent = MarketReportAgent.__new__(MarketReportAgent)  # skip __init__ (no API clients)
 
-    up = agent._build_embed(rows, 13000.0, 100.0, 0.78, 500.0, 4.0, "ctx")
+    up = agent._build_embed(rows, 13000.0, 100.0, 0.78, 500.0, 4.0)
     assert up["color"] == 0x2ECC71, up["color"]            # positive day → green
     assert up["title"].startswith("Market Report — "), up["title"]
     assert "Total value:" in up["description"]
-    # One inline field per holding, plus the market-context field.
+    # One inline field per holding; the market context is now a separate
+    # follow-up message, not an embed field.
     holding_fields = [f for f in up["fields"] if f["inline"]]
     assert len(holding_fields) == 2, holding_fields
     assert {f["name"] for f in holding_fields} == {"AAPL", "NVDA"}
-    assert up["fields"][-1]["name"] == "Market context"
+    assert "Market context" not in {f["name"] for f in up["fields"]}
 
-    down = agent._build_embed(rows, 13000.0, -300.0, -2.0, 500.0, 4.0, "ctx")
+    down = agent._build_embed(rows, 13000.0, -300.0, -2.0, 500.0, 4.0)
     assert down["color"] == 0xE74C3C, down["color"]        # negative day → red
     print("✓ test_build_embed_colors_and_fields")
 

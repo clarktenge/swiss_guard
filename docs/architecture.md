@@ -10,14 +10,15 @@ market report, a health summary, a weekly recap. The design goal was to have a t
 ## Shape of the system
 
 ```
-schedule (n8n)
+schedule (GitHub Actions)
    → agent.run()  [base.py]
         → execute()        agent-specific: fetch data, call Claude
-        → classify         governance gate
-        → save to memory   embed + store in Supabase
+        → save_output()    embed + store in Supabase
         → notify           Discord webhook
-   → eval                  validate the output, record the result
 ```
+
+The eval hook and the governance classifier are scaffolded but not yet wired
+into `run()` — they're in-progress and don't run on the live path today.
 
 Everything an agent shares — run logging, memory write, the governance gate, the
 Discord notify, error handling — lives in `BaseAgent.run()`. Each agent only
@@ -40,16 +41,16 @@ earn its keep only if I had many more agents or much more complex control flow.
 chains, hand-rolling that orchestration gets painful and a framework starts
 paying off. I'm nowhere near that.
 
-### n8n for scheduling
+### GitHub Actions for scheduling
 
-Scheduling, retries, and "run B after A succeeds" are solved problems, and n8n
+Scheduling, retries, and "run B after A succeeds" are solved problems, and GitHub Actions
 solves them with a UI I can see the state of. I didn't want to write and babysit a
 cron-plus-queue system whose only job is to call my Python on time. I am more interested in the code behind the agents, not scheduling coce.
-**What breaks first:** n8n is a separate service to keep running, and the coupling
-between "n8n knows the schedule" and "the code knows what to do" means the
+**What breaks first:** GitHub Actions is a separate service to keep running, and the coupling
+between "GitHub Actions knows the schedule" and "the code knows what to do" means the
 schedule lives outside the repo. If that split ever causes a drift bug, or if I
 want the whole thing to deploy as one unit, I'd pull scheduling into the codebase
-(APScheduler or a simple queue worker). For now the visibility n8n gives me is
+(APScheduler or a simple queue worker). For now the visibility GitHub Actions gives me is
 worth the extra moving part.
 
 ### Supabase (Postgres) + pgvector for memory and state
