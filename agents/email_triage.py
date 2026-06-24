@@ -25,7 +25,7 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.base import BaseAgent, AgentResult            # noqa: E402
-from agents.schemas import TriageOutput                    # noqa: E402
+from agents.schemas import TriageOutput, EmailItem, SaleItem  # noqa: E402
 from evals.checks import run_all_checks                    # noqa: E402
 from integrations.gmail import list_recent_emails          # noqa: E402
 from integrations.discord_notify import notify_error       # noqa: E402
@@ -92,14 +92,15 @@ Rules:
 Respond with valid JSON only. No prose before or after.
 Your response must match this exact structure:
 {
-  "urgent": [...],
-  "opportunities": [...],
-  "sales": [...],
-  "uncategorized": [...]
+  "urgent":       [{"email_id": "...", "reason": "...", "confidence": 0.0}],
+  "opportunities":[{"email_id": "...", "reason": "...", "confidence": 0.0}],
+  "sales":        [{"email_id": "...", "brand": "...", "reason": "...",
+                    "confidence": 0.0, "expires_at": null}],
+  "uncategorized":[{"email_id": "..."}]
 }
-Each item must have: email_id, from_, subject, reason, confidence (0.0-1.0).
-Sales items also need: brand, expires_at (or null).
-Every input email_id must appear in exactly one bucket."""
+Every input email_id must appear in exactly one bucket.
+reason must be one short sentence with no quotes or special characters.
+brand (sales only) must be the sender brand name only, no other text."""
 
 
 # ── Rendering / parsing helpers ──────────────────────────────────────────────
@@ -154,6 +155,51 @@ def _sanitize_email(email: dict) -> dict:
     if isinstance(cleaned.get("snippet"), str):
         cleaned["snippet"] = cleaned["snippet"][:300]
     return cleaned
+
+
+def _build_triage_output(claude_response: str, emails_by_id: dict) -> TriageOutput:
+    """
+    Merge Claude's slim classification decisions back into full typed items.
+
+    Claude now returns only the decision per email (email_id, reason,
+    confidence, plus brand/expires_at for sales) — never the from_/subject,
+    which it used to copy verbatim and corrupt with stray quotes and unicode.
+    We reconstruct the human-facing fields from the original fetch
+    (emails_by_id), so the only free text Claude contributes is its own reason.
+
+    Raises (json.JSONDecodeError / ValidationError / KeyError) on a bad
+    response so execute() can mark the run as an error rather than post garbage.
+    """
+    data = json.loads(_clean_json_response(_strip_code_fences(claude_response)))
+
+    def base_fields(item: dict) -> dict:
+        original = emails_by_id.get(item["email_id"], {})
+        return {
+            "email_id": item["email_id"],
+            "from_": original.get("from", ""),
+            "subject": original.get("subject", ""),
+            # uncategorized items carry no reason/confidence in the new schema.
+            "reason": item.get("reason", ""),
+            "confidence": item.get("confidence", 0.0),
+        }
+
+    return TriageOutput(
+        urgent=[EmailItem(**base_fields(i)) for i in data.get("urgent", [])],
+        opportunities=[
+            EmailItem(**base_fields(i)) for i in data.get("opportunities", [])
+        ],
+        sales=[
+            SaleItem(
+                **base_fields(i),
+                brand=i.get("brand", ""),
+                expires_at=i.get("expires_at"),
+            )
+            for i in data.get("sales", [])
+        ],
+        uncategorized=[
+            EmailItem(**base_fields(i)) for i in data.get("uncategorized", [])
+        ],
+    )
 
 
 # Sections in display order, with the emoji headings the briefing has always
@@ -214,14 +260,19 @@ class EmailTriageAgent(BaseAgent):
             )
 
         # Cap the batch so the JSON response can't outgrow Claude's output
-        # budget: ~150 tokens per item means a big inbox would truncate the
-        # response mid-string and fail to parse. Cap before computing
-        # input_email_ids so the conservation check only expects ids Claude saw.
-        if len(emails) > 75:
-            print(f"[email-triage] Capped batch from {len(emails)} to 75 emails")
-            emails = emails[:75]
+        # budget. With the slim decision-only schema each item is ~4 fields
+        # (~40 tokens), so 50 emails is ~2000 output tokens — well inside the
+        # 8192 budget. Cap before computing input_email_ids so the conservation
+        # check only expects ids Claude saw.
+        if len(emails) > 50:
+            print(f"[email-triage] Capped batch from {len(emails)} to 50 emails")
+            emails = emails[:50]
 
         input_email_ids = [e["id"] for e in emails]
+
+        # Index the original fetch by id so _build_triage_output can restore the
+        # from_/subject Claude no longer echoes back (it only returns decisions).
+        emails_by_id = {e["id"]: e for e in emails}
 
         # Compact, data-only view for the model. from/subject/snippet are
         # attacker-controlled, so this whole blob goes in as untrusted_data
@@ -255,12 +306,12 @@ class EmailTriageAgent(BaseAgent):
         # Step 3: parse into the typed contract. A failure here means Claude
         # returned something off-shape; raise so base.py run() marks the run as
         # error rather than silently posting garbage.
-        cleaned = _clean_json_response(_strip_code_fences(response_text))
         try:
-            triage_output = TriageOutput.model_validate_json(cleaned)
+            triage_output = _build_triage_output(response_text, emails_by_id)
         except Exception as e:
             # A response cut off by max_tokens won't end in the closing brace;
             # point at the budget rather than the schema so the fix is obvious.
+            cleaned = _clean_json_response(_strip_code_fences(response_text))
             truncated = len(cleaned) > 100 and not cleaned.rstrip().endswith("}")
             hint = (
                 " (response appears truncated — increase max_tokens or reduce batch)"

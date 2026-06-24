@@ -13,6 +13,7 @@ patch the module-level list_recent_emails, and patch call_claude on the class.
 
 import json
 
+import pytest
 from unittest.mock import patch, MagicMock
 
 from agents.email_triage import EmailTriageAgent
@@ -60,16 +61,17 @@ def _make_agent() -> EmailTriageAgent:
 # ── Tests ────────────────────────────────────────────────────────────────────
 
 def test_execute_returns_triage_output():
-    with patch("agents.email_triage.list_recent_emails",
-               return_value=FAKE_EMAILS):
-        with patch.object(EmailTriageAgent, "call_claude",
-                          return_value=VALID_TRIAGE_JSON):
-            agent = _make_agent()
-            result = agent.execute()
+    with patch("agents.email_triage.notify_error"):
+        with patch("agents.email_triage.list_recent_emails",
+                   return_value=FAKE_EMAILS):
+            with patch.object(EmailTriageAgent, "call_claude",
+                              return_value=VALID_TRIAGE_JSON):
+                agent = _make_agent()
+                result = agent.execute()
 
-            assert result.structured_output is not None
-            assert result.metadata["email_count"] == 3
-            assert result.metadata["eval_passed"] is True
+                assert result.structured_output is not None
+                assert result.metadata["email_count"] == 3
+                assert result.metadata["eval_passed"] is True
 
 
 def test_conservation_check_catches_dropped_email():
@@ -84,34 +86,36 @@ def test_conservation_check_catches_dropped_email():
         "sales": [],
         "uncategorized": []
     })
-    with patch("agents.email_triage.list_recent_emails",
-               return_value=FAKE_EMAILS):
-        with patch.object(EmailTriageAgent, "call_claude",
-                          return_value=dropped_json):
-            agent = _make_agent()
-            result = agent.execute()
+    with patch("agents.email_triage.notify_error"):
+        with patch("agents.email_triage.list_recent_emails",
+                   return_value=FAKE_EMAILS):
+            with patch.object(EmailTriageAgent, "call_claude",
+                              return_value=dropped_json):
+                agent = _make_agent()
+                result = agent.execute()
 
-            assert agent._eval_results, "eval results should be populated"
-            failed = [r for r in agent._eval_results if not r["passed"]]
-            assert failed, "expected at least one failing check"
-            assert any(r["check"] == "conservation" for r in failed)
-            assert result.metadata["eval_passed"] is False
+                assert agent._eval_results, "eval results should be populated"
+                failed = [r for r in agent._eval_results if not r["passed"]]
+                assert failed, "expected at least one failing check"
+                assert any(r["check"] == "conservation" for r in failed)
+                assert result.metadata["eval_passed"] is False
 
 
 def test_malformed_json_raises_exception():
-    with patch("agents.email_triage.list_recent_emails",
-               return_value=FAKE_EMAILS[:1]):
-        with patch.object(EmailTriageAgent, "call_claude",
-                          return_value="this is not json at all"):
-            agent = _make_agent()
-            # A parse failure must propagate so base.py run() marks the run as
-            # error rather than posting garbage.
-            try:
-                agent.execute()
-            except Exception:
-                pass
-            else:
-                raise AssertionError("execute() should have raised on bad JSON")
+    # The error path posts the raw response to agent-logs via notify_error;
+    # mock it so the offline test never reaches the real Discord webhook.
+    with patch("agents.email_triage.notify_error") as mock_notify:
+        with patch("agents.email_triage.list_recent_emails",
+                   return_value=FAKE_EMAILS[:1]):
+            with patch.object(EmailTriageAgent, "call_claude",
+                              return_value="this is not json at all"):
+                agent = _make_agent()
+                # A parse failure must propagate so base.py run() marks the run
+                # as error rather than posting garbage.
+                with pytest.raises(Exception):
+                    agent.execute()
+                # And the failure must have been reported to agent-logs.
+                mock_notify.assert_called_once()
 
 
 def test_discord_content_is_not_empty():
@@ -125,26 +129,28 @@ def test_discord_content_is_not_empty():
         "sales": [],
         "uncategorized": []
     })
-    with patch("agents.email_triage.list_recent_emails",
-               return_value=[FAKE_EMAILS[0], FAKE_EMAILS[2]]):
-        with patch.object(EmailTriageAgent, "call_claude",
-                          return_value=two_email_json):
-            agent = _make_agent()
-            result = agent.execute()
+    with patch("agents.email_triage.notify_error"):
+        with patch("agents.email_triage.list_recent_emails",
+                   return_value=[FAKE_EMAILS[0], FAKE_EMAILS[2]]):
+            with patch.object(EmailTriageAgent, "call_claude",
+                              return_value=two_email_json):
+                agent = _make_agent()
+                result = agent.execute()
 
-            assert isinstance(result.content, str)
-            assert result.content.strip()
-            lowered = result.content.lower()
-            assert "urgent" in lowered or "opportunities" in lowered
+                assert isinstance(result.content, str)
+                assert result.content.strip()
+                lowered = result.content.lower()
+                assert "urgent" in lowered or "opportunities" in lowered
 
 
 def test_code_fence_stripped_before_parse():
     fenced_json = f"```json\n{VALID_TRIAGE_JSON}\n```"
-    with patch("agents.email_triage.list_recent_emails",
-               return_value=FAKE_EMAILS):
-        with patch.object(EmailTriageAgent, "call_claude",
-                          return_value=fenced_json):
-            agent = _make_agent()
-            result = agent.execute()  # must not raise despite the fences
+    with patch("agents.email_triage.notify_error"):
+        with patch("agents.email_triage.list_recent_emails",
+                   return_value=FAKE_EMAILS):
+            with patch.object(EmailTriageAgent, "call_claude",
+                              return_value=fenced_json):
+                agent = _make_agent()
+                result = agent.execute()  # must not raise despite the fences
 
-            assert result.structured_output is not None
+                assert result.structured_output is not None
