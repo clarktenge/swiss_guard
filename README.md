@@ -58,8 +58,8 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 
 **New work**
 - [x] Cost tracking — Claude API spend per agent, per week, total monthly
-- [ ] Data governance layer — Pydantic structured output, eval framework (deterministic + LLM judge), governance enforcement for any future agent that takes external action
-- [ ] Job-scout v2 — vendor API coverage for remaining blocked sites, manual review pass
+- [x] Data governance layer — email-triage (Pydantic + tier 1 evals live)
+- [ ] Data governance rollout - remaining 5 agents
 - [ ] **Agent 6 — `study-prep`** — interview prep agent for Forward Deployed/Applied AI roles (Palantir, Anduril, Onebrief). Daily vocab/concepts, twice-weekly case scenarios, weekly coding problem, biweekly SQL drill. Own Discord channel. Ships as a one-way generator first; a lightweight local reaction-listener bot may follow later for interactive grading
 - [ ] React dashboard — once the above is stable
 
