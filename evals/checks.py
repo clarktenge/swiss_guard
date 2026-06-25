@@ -14,7 +14,7 @@ are hard checks.
 
 from typing import List, Tuple
 
-from agents.schemas import TriageOutput, HealthOutput, DigestOutput
+from agents.schemas import TriageOutput, HealthOutput, DigestOutput, MarketReportOutput
 
 
 def check_schema_valid(output: TriageOutput) -> Tuple[bool, str]:
@@ -192,4 +192,50 @@ def run_health_checks(output: HealthOutput) -> List[dict]:
     results.append(
         {"check": "numeric_consistency", "tier": 1, "passed": passed, "message": msg}
     )
+    return results
+
+
+# ── Market report ────────────────────────────────────────────────────────────
+
+def check_market_numeric_consistency(output: MarketReportOutput) -> Tuple[bool, str]:
+    """
+    Tier 1 — numeric consistency. portfolio_value is computed in Python from the
+    holdings (Claude only writes the narrative), so it must equal the sum of
+    price * shares across the holdings. A float tolerance of 0.01 absorbs penny
+    rounding. Catches the total and the per-holding lines drifting apart.
+    """
+    computed = sum(h.price * h.shares for h in output.holdings)
+    if abs(computed - output.portfolio_value) > 0.01:
+        return False, (
+            f"portfolio_value {output.portfolio_value:.2f} does not match sum of "
+            f"holdings {computed:.2f}"
+        )
+    return True, "Portfolio value consistency check passed"
+
+
+def check_market_narrative_not_empty(output: MarketReportOutput) -> Tuple[bool, str]:
+    """
+    Tier 1 — narrative content. The whole point of asking Claude is the
+    qualitative context; an empty or near-empty narrative means the report went
+    out with numbers but no commentary.
+    """
+    if not output.narrative or len(output.narrative.strip()) < 50:
+        return False, "Narrative is empty or too short"
+    return True, "Narrative present"
+
+
+def run_market_checks(output: MarketReportOutput) -> List[dict]:
+    """
+    Run every Tier 1 market-report check and return the flat list-of-dicts shape
+    the eval logger writes to Supabase.
+    """
+    results = []
+    for fn, name in [
+        (check_market_numeric_consistency, "numeric_consistency"),
+        (check_market_narrative_not_empty, "narrative_not_empty"),
+    ]:
+        passed, msg = fn(output)
+        results.append(
+            {"check": name, "tier": 1, "passed": passed, "message": msg}
+        )
     return results
