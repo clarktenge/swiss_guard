@@ -40,6 +40,8 @@ from typing import Optional, List
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.base import BaseAgent, AgentResult                       # noqa: E402
+from agents.schemas import HealthOutput, Activity                    # noqa: E402
+from evals.checks import run_health_checks                           # noqa: E402
 from integrations.strava import get_recent_activities                # noqa: E402
 from integrations.garmin import get_health_metrics                   # noqa: E402
 
@@ -189,6 +191,40 @@ def _week_over_week(current: dict, prior: Optional[dict]) -> Optional[dict]:
     }
 
 
+def _to_activities(activities: List[dict]) -> List[Activity]:
+    """
+    Map normalized Strava activities (integrations.strava) onto the typed
+    Activity schema. Pure — no I/O — so it's cheap to unit-test. Strava's
+    moving_time is in seconds; the schema wants minutes, so we convert here.
+    """
+    out: List[Activity] = []
+    for a in activities:
+        out.append(
+            Activity(
+                name=a.get("name", ""),
+                sport_type=a.get("type", "Workout"),
+                date=a.get("date", ""),
+                distance_miles=round(a.get("distance_mi") or 0.0, 2),
+                duration_minutes=round((a.get("moving_time_s") or 0) / 60, 1),
+                elevation_feet=a.get("elevation_gain_ft") or 0.0,
+                avg_heart_rate=a.get("average_heartrate"),
+                calories=a.get("calories"),
+            )
+        )
+    return out
+
+
+def _pct_change(current: float, prior: Optional[float]) -> Optional[float]:
+    """
+    Percent change in weekly distance vs. the prior week, computed in Python.
+    Returns None when there's no prior week on record (first run) or last week
+    was zero — both cases where a percentage would be meaningless rather than 0.
+    """
+    if not prior:  # None or 0.0 → no meaningful baseline
+        return None
+    return round((current - prior) / prior * 100, 1)
+
+
 def _has_garmin_metrics(garmin: Optional[dict]) -> bool:
     """
     True if Garmin returned at least one real metric. get_health_metrics always
@@ -273,20 +309,51 @@ class HealthSyncAgent(BaseAgent):
             self.garmin_data = self._fetch_garmin()
         has_garmin = _has_garmin_metrics(self.garmin_data)
 
-        # 2. Compute this week's stats + week-over-week, all in Python.
+        # 2. Compute this week's stats + week-over-week, all in Python. The
+        #    by-type breakdown / avg-HR / elevation used by the Discord render
+        #    come from `weekly`; the typed HealthOutput numbers are derived from
+        #    the same activity list so the Tier 1 numeric-consistency check holds.
         weekly = compute_weekly_stats(activities)
         prior_weekly = self._load_prior_week_stats()
         wow = _week_over_week(weekly, prior_weekly)
 
+        typed_activities = _to_activities(activities)
+        week_distance_miles = round(
+            sum(a.distance_miles for a in typed_activities), 2
+        )
+        week_duration_minutes = round(
+            sum(a.duration_minutes for a in typed_activities), 1
+        )
+        vs_last_week_distance = _pct_change(
+            week_distance_miles, (prior_weekly or {}).get("total_distance_mi")
+        )
+
         if not activities and not has_garmin:
             # Nothing from Strava and nothing usable from Garmin — say so plainly
-            # rather than asking Claude to narrate an empty week.
+            # rather than asking Claude to narrate an empty week. We still build a
+            # (empty) HealthOutput and run the Tier 1 checks so governance has a
+            # row for the run, just like every other path.
+            narrative = (
+                "No Strava activities in the last 7 days. Enjoy the rest, or get "
+                "one in!"
+            )
+            output = self._build_output(
+                typed_activities,
+                week_distance_miles,
+                week_duration_minutes,
+                vs_last_week_distance,
+                narrative,
+            )
+            self._eval_results = run_health_checks(output)
             return AgentResult(
-                content=(
-                    "🏃 **Health sync** — no Strava activities in the last 7 days. "
-                    "Enjoy the rest, or get one in! 💪"
-                ),
-                metadata={"weekly": weekly, "activity_count": 0},
+                content=f"🏃 **Health sync** — {narrative} 💪",
+                structured_output=output.model_dump(),
+                metadata={
+                    "weekly": weekly,
+                    "activity_count": 0,
+                    "week_distance_miles": week_distance_miles,
+                    "eval_passed": all(r["passed"] for r in self._eval_results),
+                },
             )
 
         # 3. Hand Claude the computed figures (trusted) + the activity list and
@@ -316,21 +383,68 @@ class HealthSyncAgent(BaseAgent):
             max_tokens=1024,
         ).strip()
 
-        # 4. Assemble final markdown: a Python-rendered stats line (reliable
-        #    numbers) followed by Claude's synthesis.
-        content = self._render(weekly, narrative)
+        # 4. Build the typed HealthOutput (numbers from Python, narrative from
+        #    Claude) and run the Tier 1 numeric-consistency checks. base.py run()
+        #    persists self._eval_results via log_eval_results() after _save_output.
+        output = self._build_output(
+            typed_activities,
+            week_distance_miles,
+            week_duration_minutes,
+            vs_last_week_distance,
+            narrative,
+        )
+        self._eval_results = run_health_checks(output)
 
+        # 5. Assemble final markdown: a Python-rendered stats line (reliable
+        #    numbers, full by-type/HR breakdown) followed by Claude's synthesis.
+        content = self._format_health_for_discord(weekly, output)
+
+        # 6. Hand back the markdown (Discord) and the structured object (eval
+        #    layer / agent_outputs.structured_output). `weekly` stays in metadata:
+        #    _load_prior_week_stats reads it back for next run's WoW comparison.
         return AgentResult(
             content=content,
+            structured_output=output.model_dump(),
             metadata={
                 "weekly": weekly,
-                "activity_count": weekly["activity_count"],
+                "activity_count": output.week_activity_count,
+                "week_distance_miles": output.week_distance_miles,
                 "has_garmin": _has_garmin_metrics(self.garmin_data),
+                "eval_passed": all(r["passed"] for r in self._eval_results),
             },
         )
 
-    def _render(self, weekly: dict, narrative: str) -> str:
-        """Render the briefing markdown. Pure formatting of computed numbers."""
+    def _build_output(
+        self,
+        activities: List[Activity],
+        week_distance_miles: float,
+        week_duration_minutes: float,
+        vs_last_week_distance: Optional[float],
+        narrative: str,
+    ) -> HealthOutput:
+        """
+        Assemble the typed HealthOutput from Python-computed numbers and Claude's
+        narrative. week_activity_count is len(activities) so it's consistent with
+        the list by construction (the Tier 1 check verifies this and the distance
+        total still hold together).
+        """
+        return HealthOutput(
+            activities=activities,
+            week_distance_miles=week_distance_miles,
+            week_duration_minutes=week_duration_minutes,
+            week_activity_count=len(activities),
+            vs_last_week_distance=vs_last_week_distance,
+            narrative=narrative,
+        )
+
+    def _format_health_for_discord(self, weekly: dict, output: HealthOutput) -> str:
+        """
+        Render the briefing markdown for Discord. Pure formatting of the
+        Python-computed numbers (the rich by-type / avg-HR / elevation breakdown
+        comes from `weekly`), followed by Claude's narrative from `output`. A
+        week-over-week distance line is added when there's a prior week to
+        compare against.
+        """
         lines = ["🏃 **Health sync**\n"]
 
         # One-line week summary, then a per-sport breakdown.
@@ -343,6 +457,11 @@ class HealthSyncAgent(BaseAgent):
         )
         if weekly["avg_heartrate"]:
             lines.append(f"- Avg HR: {weekly['avg_heartrate']:g} bpm")
+        if output.vs_last_week_distance is not None:
+            arrow = "▲" if output.vs_last_week_distance >= 0 else "▼"
+            lines.append(
+                f"- Distance vs last week: {arrow} {output.vs_last_week_distance:+g}%"
+            )
 
         for sport, b in sorted(
             weekly["by_type"].items(),
@@ -354,7 +473,7 @@ class HealthSyncAgent(BaseAgent):
                 f"{_fmt_duration(b['moving_time_s'])}"
             )
         lines.append("")
-        lines.append(narrative)
+        lines.append(output.narrative)
 
         return "\n".join(lines)
 

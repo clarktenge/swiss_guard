@@ -79,3 +79,29 @@ class MarketReportOutput(BaseModel):
     day_pnl_pct: float
     holdings: List[HoldingLine] = Field(default_factory=list)
     narrative: str
+
+
+# ── Health sync ──────────────────────────────────────────────────────────────
+
+class Activity(BaseModel):
+    name: str
+    sport_type: str
+    date: str
+    distance_miles: float
+    duration_minutes: float
+    elevation_feet: float
+    avg_heart_rate: Optional[float] = None
+    calories: Optional[float] = None
+
+
+class HealthOutput(BaseModel):
+    # Every numeric field below is computed in Python from the activity list
+    # (the "numbers in Python, narrative from Claude" pattern, docs/architecture.md):
+    # Claude contributes only `narrative`. The eval checks assert week_* against
+    # `activities`, so these must be derived from the same list.
+    activities: List[Activity] = Field(default_factory=list)
+    week_distance_miles: float       # sum of activity distances (Python)
+    week_duration_minutes: float     # sum of activity durations (Python)
+    week_activity_count: int         # len(activities) (Python)
+    vs_last_week_distance: Optional[float] = None  # % change vs prior week (Python)
+    narrative: str                   # Claude writes this only

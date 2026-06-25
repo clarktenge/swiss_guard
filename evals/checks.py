@@ -14,7 +14,7 @@ are hard checks.
 
 from typing import List, Tuple
 
-from agents.schemas import TriageOutput
+from agents.schemas import TriageOutput, HealthOutput
 
 
 def check_schema_valid(output: TriageOutput) -> Tuple[bool, str]:
@@ -103,3 +103,43 @@ def run_all_checks(
         {"check": "conservation", "passed": cons_passed, "message": cons_msg},
         {"check": "confidence_sanity", "passed": conf_passed, "message": conf_msg},
     ]
+
+
+# ── Health sync ──────────────────────────────────────────────────────────────
+
+def check_health_numeric_consistency(output: HealthOutput) -> Tuple[bool, str]:
+    """
+    Tier 1 — numeric consistency. The week_* totals are computed in Python from
+    the activity list (Claude only writes the narrative), so they must agree with
+    the activities they were derived from. This catches a mismatch slipping in if
+    the totals and the activity list ever drift apart.
+    """
+    # Verify week_distance_miles equals sum of activity distances.
+    computed = sum(a.distance_miles for a in output.activities)
+    if abs(computed - output.week_distance_miles) > 0.1:
+        return False, (
+            f"week_distance_miles {output.week_distance_miles} does not match "
+            f"sum of activities {computed:.2f}"
+        )
+
+    # Verify week_activity_count equals len(activities).
+    if output.week_activity_count != len(output.activities):
+        return False, (
+            f"week_activity_count {output.week_activity_count} does not match "
+            f"activity count {len(output.activities)}"
+        )
+
+    return True, "Numeric consistency checks passed"
+
+
+def run_health_checks(output: HealthOutput) -> List[dict]:
+    """
+    Run every Tier 1 health-sync check and return the flat list-of-dicts shape
+    the eval logger writes to Supabase.
+    """
+    results = []
+    passed, msg = check_health_numeric_consistency(output)
+    results.append(
+        {"check": "numeric_consistency", "tier": 1, "passed": passed, "message": msg}
+    )
+    return results
