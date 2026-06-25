@@ -14,7 +14,7 @@ are hard checks.
 
 from typing import List, Tuple
 
-from agents.schemas import TriageOutput, HealthOutput
+from agents.schemas import TriageOutput, HealthOutput, DigestOutput
 
 
 def check_schema_valid(output: TriageOutput) -> Tuple[bool, str]:
@@ -103,6 +103,56 @@ def run_all_checks(
         {"check": "conservation", "passed": cons_passed, "message": cons_msg},
         {"check": "confidence_sanity", "passed": conf_passed, "message": conf_msg},
     ]
+
+
+# ── Email digest ─────────────────────────────────────────────────────────────
+
+def check_digest_delta_validity(output: DigestOutput) -> Tuple[bool, str]:
+    """
+    Tier 1 — delta validity. is_delta=True asserts this summary builds on a prior
+    one, so it must name the prior context it builds on (delta_basis). A claimed
+    delta with a null basis is a hallucinated continuity — the agent says it's
+    updating something it can't point to — so we fail it.
+    """
+    violations = []
+    for item in output.isw + output.research:
+        if item.is_delta and not item.delta_basis:
+            violations.append(item.title)
+    if violations:
+        return False, f"is_delta=True but delta_basis is null for: {violations}"
+    return True, "Delta validity check passed"
+
+
+def check_digest_summaries_not_empty(output: DigestOutput) -> Tuple[bool, str]:
+    """
+    Tier 1 — summary content. Every surfaced item must carry a real summary. An
+    empty or near-empty summary means the agent put something in the digest
+    without saying anything about it, which is worse than dropping it.
+    """
+    empty = []
+    for item in output.isw + output.research:
+        if not item.summary or len(item.summary.strip()) < 20:
+            empty.append(item.title)
+    if empty:
+        return False, f"Empty or near-empty summaries found: {empty}"
+    return True, "All summaries have content"
+
+
+def run_digest_checks(output: DigestOutput) -> List[dict]:
+    """
+    Run every Tier 1 email-digest check and return the flat list-of-dicts shape
+    the eval logger writes to Supabase.
+    """
+    results = []
+    for fn, name in [
+        (check_digest_delta_validity, "delta_validity"),
+        (check_digest_summaries_not_empty, "summaries_not_empty"),
+    ]:
+        passed, msg = fn(output)
+        results.append(
+            {"check": name, "tier": 1, "passed": passed, "message": msg}
+        )
+    return results
 
 
 # ── Health sync ──────────────────────────────────────────────────────────────
