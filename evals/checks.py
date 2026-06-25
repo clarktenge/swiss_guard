@@ -14,7 +14,13 @@ are hard checks.
 
 from typing import List, Tuple
 
-from agents.schemas import TriageOutput, HealthOutput, DigestOutput, MarketReportOutput
+from agents.schemas import (
+    TriageOutput,
+    HealthOutput,
+    DigestOutput,
+    MarketReportOutput,
+    WeeklyOutput,
+)
 
 
 def check_schema_valid(output: TriageOutput) -> Tuple[bool, str]:
@@ -233,6 +239,64 @@ def run_market_checks(output: MarketReportOutput) -> List[dict]:
     for fn, name in [
         (check_market_numeric_consistency, "numeric_consistency"),
         (check_market_narrative_not_empty, "narrative_not_empty"),
+    ]:
+        passed, msg = fn(output)
+        results.append(
+            {"check": name, "tier": 1, "passed": passed, "message": msg}
+        )
+    return results
+
+
+# ── Weekly report ────────────────────────────────────────────────────────────
+
+def check_weekly_score_in_range(output: WeeklyOutput) -> Tuple[bool, str]:
+    """
+    Tier 1 — score bounds. Claude is asked to rate the week 1-10; a score
+    outside that range means it ignored the contract, so we fail it rather than
+    post a nonsensical "12/10" week.
+    """
+    if not 1 <= output.week_score <= 10:
+        return False, f"week_score {output.week_score} is outside valid range 1-10"
+    return True, "Week score in valid range"
+
+
+def check_weekly_priorities_count(output: WeeklyOutput) -> Tuple[bool, str]:
+    """
+    Tier 1 — priorities count. The prompt asks for exactly three next-week
+    priorities; we enforce 1-3 (the WeeklyOutput build already truncates to 3,
+    so this mainly guards against an empty list — a wrap-up with no direction).
+    """
+    if len(output.next_week_priorities) > 3:
+        return False, (
+            f"next_week_priorities has {len(output.next_week_priorities)} items, "
+            "max is 3"
+        )
+    if len(output.next_week_priorities) == 0:
+        return False, "next_week_priorities is empty"
+    return True, "Priorities count valid"
+
+
+def check_weekly_narrative_not_empty(output: WeeklyOutput) -> Tuple[bool, str]:
+    """
+    Tier 1 — narrative content. The qualitative wrap-up is the point of asking
+    Claude; an empty or near-empty narrative means the report went out with
+    numbers but no synthesis.
+    """
+    if not output.narrative or len(output.narrative.strip()) < 50:
+        return False, "Narrative is empty or too short"
+    return True, "Narrative present"
+
+
+def run_weekly_checks(output: WeeklyOutput) -> List[dict]:
+    """
+    Run every Tier 1 weekly-report check and return the flat list-of-dicts shape
+    the eval logger writes to Supabase.
+    """
+    results = []
+    for fn, name in [
+        (check_weekly_score_in_range, "score_in_range"),
+        (check_weekly_priorities_count, "priorities_count"),
+        (check_weekly_narrative_not_empty, "narrative_not_empty"),
     ]:
         passed, msg = fn(output)
         results.append(

@@ -105,3 +105,24 @@ class HealthOutput(BaseModel):
     week_activity_count: int         # len(activities) (Python)
     vs_last_week_distance: Optional[float] = None  # % change vs prior week (Python)
     narrative: str                   # Claude writes this only
+
+
+# ── Weekly report ────────────────────────────────────────────────────────────
+
+class WeeklyOutput(BaseModel):
+    # Unlike the other agents, weekly-report fetches no external data: it
+    # aggregates the prior week's governed agent outputs from Supabase. Every
+    # numeric field below is computed in Python from those outputs (the same
+    # "numbers in Python, narrative from Claude" pattern as health-sync /
+    # market-report). Claude contributes only week_score, narrative, and
+    # next_week_priorities. See agents/weekly_report.py.
+    week_of: str                     # ISO date string for Monday of the week
+    workouts_completed: int          # computed from health-sync outputs
+    total_distance_miles: float      # computed from health-sync outputs
+    emails_processed: int            # computed from email-triage outputs
+    opportunities_found: int         # computed from email-triage outputs
+    new_jobs_found: int              # computed from job-scout outputs
+    portfolio_day_pnl: float         # computed from market-report outputs
+    week_score: int                  # Claude assigns 1-10
+    narrative: str                   # Claude writes this
+    next_week_priorities: List[str]  # Claude writes these, max 3 items
