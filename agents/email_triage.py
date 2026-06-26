@@ -36,7 +36,7 @@ You are an email triage assistant. You are given a batch of emails from the
 last 24 hours (sender, subject, and a short snippet for each). Your job is to
 produce a concise, scannable briefing for the reader to skim on Discord.
 
-Sort EVERY email into exactly one of these four buckets, in this order:
+Sort EVERY email into exactly one of these five buckets, in this order:
 
   🔴 urgent
       Time-sensitive emails requiring action today. Genuinely needs attention
@@ -61,11 +61,10 @@ Sort EVERY email into exactly one of these four buckets, in this order:
   💼 opportunities
       Job postings, research opportunities, internships, interviews,
       referrals, intros, scholarships, research positions, grants, and calls
-      for collaboration. This also includes emails from the Institute for the
-      Study of War (ISW) and research-paper / academic-digest emails (e.g.
-      arXiv, journal alerts, paper newsletters). Flag only — list the sender
-      and subject; do NOT summarize them, as a separate email-digest agent
-      handles summaries.
+      for collaboration. Opportunities are actionable leads that require the
+      reader to do something — apply, reply, follow up. Passive informational
+      mail (ISW reports, research newsletters, academic digests) is NOT an
+      opportunity; it belongs in updates.
 
   🏷️ sales
       Discounts, drops, and promotional emails from brands: price drops,
@@ -74,6 +73,13 @@ Sort EVERY email into exactly one of these four buckets, in this order:
       ("today only", "expires today", "last chance", "ends soon") — they go
       here, not in urgent.
 
+  📰 updates
+      Newsletters, digests, and informational emails that require no action —
+      ISW reports, JournalClub.io, research newsletters, academic digests, any
+      email that is purely informational and will be handled by a separate
+      digest agent. These should NOT go in opportunities — opportunities are
+      actionable leads, not passive information.
+
   📦 uncategorized
       Everything else — emails that don't fit any bucket above. Routine noise
       (newsletters that aren't research, receipts, social notifications,
@@ -81,11 +87,11 @@ Sort EVERY email into exactly one of these four buckets, in this order:
 
 Rules:
   - Account for EVERY input email. Each email goes into exactly one bucket —
-    either a named bucket (urgent, opportunities, sales) or uncategorized.
-    Never silently drop an email; if it doesn't fit a named bucket, it belongs
-    in uncategorized.
+    either a named bucket (urgent, opportunities, sales, updates) or
+    uncategorized. Never silently drop an email; if it doesn't fit a named
+    bucket, it belongs in uncategorized.
   - For each item, the "reason" is one brief (≤ 12 word) note on why it's in
-    that bucket. For the opportunities bucket, ISW / research-paper items can
+    that bucket. For the updates bucket, ISW / research-paper items can
     use a short sender/subject-based reason — they're flagged, not summarized.
   - "confidence" is your 0.0–1.0 certainty that the item belongs in its bucket.
 
@@ -96,6 +102,7 @@ Your response must match this exact structure:
   "opportunities":[{"email_id": "...", "reason": "...", "confidence": 0.0}],
   "sales":        [{"email_id": "...", "brand": "...", "reason": "...",
                     "confidence": 0.0, "expires_at": null}],
+  "updates":      [{"email_id": "...", "reason": "...", "confidence": 0.0}],
   "uncategorized":[{"email_id": "..."}]
 }
 Every input email_id must appear in exactly one bucket.
@@ -196,6 +203,9 @@ def _build_triage_output(claude_response: str, emails_by_id: dict) -> TriageOutp
             )
             for i in data.get("sales", [])
         ],
+        updates=[
+            EmailItem(**base_fields(i)) for i in data.get("updates", [])
+        ],
         uncategorized=[
             EmailItem(**base_fields(i)) for i in data.get("uncategorized", [])
         ],
@@ -208,6 +218,7 @@ _SECTIONS = (
     ("🔴 Urgent", "urgent"),
     ("💼 Opportunities", "opportunities"),
     ("🏷️ Sales", "sales"),
+    ("📰 Updates", "updates"),
     ("📦 Uncategorized", "uncategorized"),
 )
 
@@ -228,6 +239,11 @@ def _format_for_discord(output: TriageOutput) -> str:
             continue
         lines.append(f"**{heading}**")
         for item in items:
+            # Updates are flag-only — sender | subject, no reason. A separate
+            # digest agent handles the detail, so a one-liner is enough here.
+            if attr == "updates":
+                lines.append(f"- {item.from_} | {item.subject}")
+                continue
             # Sales items carry a brand (and maybe an expiry) worth surfacing.
             brand = getattr(item, "brand", None)
             expires_at = getattr(item, "expires_at", None)

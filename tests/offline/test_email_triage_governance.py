@@ -40,6 +40,7 @@ VALID_TRIAGE_JSON = json.dumps({
     "sales": [{"email_id": "id002", "from_": "shop@brand.com",
                "subject": "50% off today only", "reason": "Promotional",
                "confidence": 0.9, "brand": "Brand", "expires_at": None}],
+    "updates": [],
     "uncategorized": []
 })
 
@@ -84,6 +85,7 @@ def test_conservation_check_catches_dropped_email():
                            "subject": "New role posted", "reason": "ML role",
                            "confidence": 0.8}],
         "sales": [],
+        "updates": [],
         "uncategorized": []
     })
     with patch("agents.email_triage.notify_error"):
@@ -127,6 +129,7 @@ def test_discord_content_is_not_empty():
                            "subject": "New role posted", "reason": "ML role",
                            "confidence": 0.8}],
         "sales": [],
+        "updates": [],
         "uncategorized": []
     })
     with patch("agents.email_triage.notify_error"):

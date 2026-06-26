@@ -10,7 +10,7 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 
 | Agent | Schedule | Role |
 |---|---|---|
-| `email-triage` | 7:00 AM | Sorts inbox into urgent, opportunities, sales, uncategorized |
+| `email-triage` | 7:00 AM | Sorts inbox into urgent, opportunities, sales, updates, uncategorized |
 | `email-digest` | 7:15 AM | ISW summaries, research papers, article digests |
 | `market-report` | 5:00 PM (weekdays) | Portfolio P&L, market context, competitor moves |
 | `health-sync` | 6:30 AM | Strava activity, weekly fitness trends |

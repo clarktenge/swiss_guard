@@ -38,12 +38,17 @@ def check_conservation(
 ) -> Tuple[bool, str]:
     """
     Tier 1, check 2 — conservation. Every input email_id must appear exactly
-    once across all buckets (urgent + opportunities + sales + uncategorized).
+    once across all buckets (urgent + opportunities + sales + updates +
+    uncategorized).
     Catches dropped emails (in input, missing from output), invented emails
     (in output, not in input), and duplicates (listed in more than one bucket).
     """
     buckets = (
-        output.urgent + output.opportunities + output.sales + output.uncategorized
+        output.urgent
+        + output.opportunities
+        + output.sales
+        + output.updates
+        + output.uncategorized
     )
     out_ids = [item.email_id for item in buckets]
 

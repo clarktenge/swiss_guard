@@ -9,8 +9,8 @@ got better or worse without manually reading 70 emails.
 
 `email-triage` pulls the last 24 hours of mail across my accounts (via
 `integrations/gmail.py`), sends the batch to Claude, and gets back a
-categorization of what matters. Four buckets: urgent, opportunities, sales,
-and uncategorized. It runs at 7 AM and posts to Discord.
+categorization of what matters. Five buckets: urgent, opportunities, sales,
+updates, and uncategorized. It runs at 7 AM and posts to Discord.
 
 The problem with the first version: the output was free-text markdown. There's
 no way to programmatically check free text. "Did it catch the urgent email?" is
@@ -27,6 +27,7 @@ TriageOutput
   urgent:        list[EmailItem]
   opportunities: list[EmailItem]
   sales:         list[SaleItem]
+  updates:       list[EmailItem]   # newsletters / digests — no action needed
   uncategorized: list[EmailItem]   # emails the agent chose not to surface
 
 EmailItem
@@ -57,7 +58,7 @@ broke.
    real-world agent breakage and the cheapest to catch.
 
 2. **Conservation.** Every `email_id` in the input appears exactly once across
-   all four buckets. No email invented (ID not in input), none dropped (ID in
+   all five buckets. No email invented (ID not in input), none dropped (ID in
    input, missing from output), none duplicated. This is the check that proves
    the agent processed the whole batch.
 

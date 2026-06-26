@@ -40,6 +40,11 @@ class TriageOutput(BaseModel):
     urgent: List[EmailItem] = Field(default_factory=list)
     opportunities: List[EmailItem] = Field(default_factory=list)
     sales: List[SaleItem] = Field(default_factory=list)
+    # Newsletters, digests, and purely informational mail that needs no action
+    # (ISW reports, research newsletters, academic digests). A separate digest
+    # agent handles the detail; triage only flags them here so they stay out of
+    # opportunities (which are actionable leads).
+    updates: List[EmailItem] = Field(default_factory=list)
     # Emails the agent chose not to surface. Forcing it to account for *every*
     # input — surface it or explicitly set it aside — is what lets the
     # conservation check catch silently-dropped emails.
