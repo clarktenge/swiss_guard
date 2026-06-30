@@ -12,7 +12,7 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 |---|---|---|
 | `email-triage` | 7:00 AM | Sorts inbox into urgent, opportunities, sales, updates, uncategorized |
 | `email-digest` | 7:15 AM | ISW summaries, research papers, article digests |
-| `market-report` | 5:00 PM (weekdays) | Portfolio P&L, market context, competitor moves |
+| `market-report` | 5:00 PM (weekdays) | Portfolio P&L, market context |
 | `health-sync` | 6:30 AM | Strava activity, weekly fitness trends |
 | `weekly-report` | 8:00 PM (Sunday) | Full week recap — workouts, work, opportunities |
 | `job-scout` | 8:00 AM daily | New job postings from target company career pages |
@@ -24,7 +24,7 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 - **Agents** — Anthropic SDK (Claude), written in Python
 - **Orchestration** — Github Actions (scheduled workflows, one per agent)
 - **Memory** — Supabase (Postgres + pgvector) + Voyage AI embeddings
-- **Dashboard** — Retool (v1) → React + TypeScript (v2)
+- **Dashboard** — Discord (v1) → React + TypeScript (v2)
 - **Integrations** — Gmail, Strava, Garmin, yfinance
 
 ---
@@ -58,9 +58,9 @@ Swiss Guard is a multi-agent intelligence system that runs daily on a schedule, 
 
 **New work**
 - [x] Cost tracking — Claude API spend per agent, per week, total monthly
-- [x] Data governance layer — email-triage (Pydantic + tier 1 evals live)
-- [ ] Data governance rollout - remaining 5 agents
-- [ ] **Agent 6 — `study-prep`** — interview prep agent for Forward Deployed/Applied AI roles (Palantir, Anduril, Onebrief). Daily vocab/concepts, twice-weekly case scenarios, weekly coding problem, biweekly SQL drill. Own Discord channel. Ships as a one-way generator first; a lightweight local reaction-listener bot may follow later for interactive grading
+- [x] Data governance layer — email-triage, email-digest, market-report, health-sync, weekly-report (Pydantic + tier 1 evals live)
+- [ ] Data governance rollout — job-scout (still ungoverned: no Pydantic schema or evals)
+- [ ] **Agent 7 — `study-prep`** — interview prep agent for Forward Deployed/Applied AI roles (Palantir, Anduril, Onebrief). Daily vocab/concepts, twice-weekly case scenarios, weekly coding problem, biweekly SQL drill. Own Discord channel. Ships as a one-way generator first; a lightweight local reaction-listener bot may follow later for interactive grading
 - [ ] React dashboard — once the above is stable
 
 ---

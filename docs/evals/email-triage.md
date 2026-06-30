@@ -20,7 +20,14 @@ first real change is making the output structured.
 ## Structured output contract
 
 The agent returns JSON matching this shape (validated with Pydantic before
-anything else happens to it):
+anything else happens to it). Crucially, **Claude returns decisions only** —
+`email_id`, `reason`, `confidence` (plus `brand`/`expires_at` for sales). It does
+*not* echo `from_`/`subject` back; those human-facing fields are reconstructed in
+Python from the original fetch (`emails_by_id` in `_build_triage_output`), so the
+only free text the model contributes is its own `reason`. This is a
+prompt-injection mitigation: attacker-controlled sender/subject text never makes
+a round-trip through the model. The validated `EmailItem` therefore carries the
+full shape below, but only the marked fields come from Claude:
 
 ```
 TriageOutput
@@ -31,15 +38,15 @@ TriageOutput
   uncategorized: list[EmailItem]   # emails the agent chose not to surface
 
 EmailItem
-  email_id:   str        # must match a real ID from the input batch
-  from:       str
-  subject:    str
-  reason:     str        # one sentence: why it's in this bucket
-  confidence: float      # 0.0–1.0
+  email_id:   str        # from Claude; must match a real ID from the input batch
+  reason:     str        # from Claude; one sentence: why it's in this bucket
+  confidence: float      # from Claude; 0.0–1.0
+  from_:      str        # reconstructed in Python ("from" alias); not emitted by Claude
+  subject:    str        # reconstructed in Python; not emitted by Claude
 
 SaleItem  (extends EmailItem)
-  brand:      str
-  expires_at: str | None
+  brand:      str        # from Claude
+  expires_at: str | None # from Claude
 ```
 
 The `uncategorized` bucket matters more than it looks. Forcing the agent to
@@ -49,35 +56,44 @@ is the failure mode I most want to catch.
 
 ## Tier 1 — deterministic checks
 
-These run on every output. They're cheap, fast, and don't need a model. If any
-fail, the run is flagged in `agent_runs` and the eval logger records which check
-broke.
+These run on every output via `run_all_checks()` in `evals/checks.py`. They're
+cheap, fast, and don't need a model. The results are stashed on
+`self._eval_results` during `execute()` and persisted by `run()`.
 
-1. **Schema validity.** Output parses as valid `TriageOutput`. A model that
-   returns malformed JSON is a hard failure — this is the single most common
-   real-world agent breakage and the cheapest to catch.
+1. **Schema validity** (`check_schema_valid`). Output parses as valid
+   `TriageOutput`. Pydantic already enforces this upstream — if we hold a
+   `TriageOutput` at all, it parsed — so this check always returns pass; it
+   exists so a schema-validity result is recorded for every run rather than being
+   silently implicit.
 
-2. **Conservation.** Every `email_id` in the input appears exactly once across
-   all five buckets. No email invented (ID not in input), none dropped (ID in
-   input, missing from output), none duplicated. This is the check that proves
-   the agent processed the whole batch.
+2. **Conservation** (`check_conservation`). Every `email_id` in the input appears
+   exactly once across all five buckets. No email invented (ID not in input),
+   none dropped (ID in input, missing from output), none duplicated. This is the
+   check that proves the agent processed the whole batch.
 
-3. **Confidence sanity.** Anything in `urgent` with confidence below 0.5 is
-   suspect — if the agent isn't sure it's urgent, it probably shouldn't be in
-   the bucket that pings me. These get logged for review rather than hard-failed.
+3. **Confidence sanity** (`check_confidence_sanity`). Anything in `urgent` with
+   confidence below 0.5 is suspect — if the agent isn't sure it's urgent, it
+   probably shouldn't be in the bucket that pings me. Advisory: it reports
+   `passed=False` when it flags something (so the signal is queryable) but is not
+   meant to fail a run on its own.
 
-4. **No empty reasons.** Every surfaced item has a non-empty `reason`. An item
-   with no justification is the agent padding output.
+4. **No empty reasons.** *Designed, not yet implemented.* The idea: every
+   surfaced item has a non-empty `reason`; an item with no justification is the
+   agent padding output. There is no corresponding check function in
+   `evals/checks.py` today.
 
 ## Tier 2 — LLM-as-judge
 
+**Designed, not yet implemented.** No judge code exists in `evals/` today; the
+three judges below describe the intended Tier 2 layer, not current behavior.
+
 Some things can't be checked with assertions. "Is this email actually urgent, or
 did the agent overreact to the word 'URGENT' in a marketing subject line?" is a
-judgment call. For these I run a second, separate Claude call with a narrow job:
+judgment call. For these I'd run a second, separate Claude call with a narrow job:
 score one specific quality, return a number and a reason.
 
-I keep the judge calls small and single-purpose rather than asking one prompt to
-grade everything. Three judges:
+The plan keeps the judge calls small and single-purpose rather than asking one
+prompt to grade everything. Three judges:
 
 - **Urgency precision.** Given the urgent bucket and the original emails, what
   fraction are genuinely time-sensitive vs. promotional language? Returns a

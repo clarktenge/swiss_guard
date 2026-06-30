@@ -1,10 +1,19 @@
 # Governance
 
-The first version of governance was a label. Each output got tagged READ_ONLY,
-DRAFT, or ACTION in `governance/classifier.py`. That's honest about intent but it
-doesn't actually *do* anything — a label is a comment with extra steps. This
-document describes turning the label into a policy that gates what the system is
-allowed to do.
+> **Status (code reality):** This document describes the *intended* governance
+> model. Almost none of it is built yet. There is no classifier function
+> (`classify_output()` does not exist) and no enforcement gate in the code. The
+> only thing that exists today is the `agent_outputs.governance_class` column
+> (added in `db/migration_001.sql`), which defaults to `READ_ONLY` — and nothing
+> in the code ever writes it, so every output is `READ_ONLY` purely by that
+> column default. All six agents are READ_ONLY (they fetch, summarize, and post;
+> none take an external action), so there is nothing ACTION-class to gate. The
+> model below is the design for when that changes.
+
+The governance idea starts as a label: each output is conceptually READ_ONLY,
+DRAFT, or ACTION. A label is honest about intent but it doesn't actually *do*
+anything — a label is a comment with extra steps. This document describes turning
+that label into a policy that gates what the system is allowed to do.
 
 ## The distinction that matters
 
@@ -19,12 +28,12 @@ Right now none of my agents take external action — they all report. So why bui
 this before I need it? Because the moment I add an agent that *can* act (a draft
 reply, a calendar event, eventually a job application), the safe-by-default
 machinery needs to already exist. Building the gate after you've built the thing
-that needs gating is how accidents happen. The classifier should be load-bearing
-before there's a load.
+that needs gating is how accidents happen. The classifier (once built) should be
+load-bearing before there's a load.
 
 ## The three classes, defined by capability not content
 
-- **READ_ONLY** — produces information, takes no external action. All five
+- **READ_ONLY** — produces information, takes no external action. All six
   current agents. Posts to Discord, writes to memory, nothing leaves the system
   that affects the outside world. No approval needed.
 - **DRAFT** — produces something intended to become an external action but not
@@ -41,8 +50,8 @@ than by content keywords is what keeps the gate from being fooled by phrasing.
 
 ## Policy rules
 
-The classifier applies rules in order; the most restrictive applicable rule wins.
-This is the actual logic, not just a mapping:
+The classifier (when built) applies rules in order; the most restrictive
+applicable rule wins. This is the intended logic, not just a mapping:
 
 1. **Capability floor.** Each agent declares the maximum class it's allowed to
    produce. `email-triage` is declared READ_ONLY and *cannot* emit a DRAFT or
@@ -66,8 +75,8 @@ This is the actual logic, not just a mapping:
 
 ## Enforcement mechanics
 
-The gate lives in `base.py`, in the path between an agent producing output and
-anything happening to that output. Concretely:
+The gate will live in `base.py`, in the path between an agent producing output and
+anything happening to that output (none of this is wired today). Concretely:
 
 - After `execute()` returns, the output is classified.
 - READ_ONLY flows straight through to memory + Discord as it does now.

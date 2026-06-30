@@ -13,15 +13,22 @@ market report, a health summary, a weekly recap. The design goal was to have a t
 schedule (GitHub Actions)
    → agent.run()  [base.py]
         → execute()        agent-specific: fetch data, call Claude
-        → save_output()    embed + store in Supabase
+        → _save_output()   embed + store in Supabase
         → notify           Discord webhook
 ```
 
-The eval hook and the governance classifier are scaffolded but not yet wired
-into `run()` — they're in-progress and don't run on the live path today.
+The Tier 1 eval hook *is* wired into `run()`: governed agents stash their
+deterministic check results on `self._eval_results` during `execute()` and
+`run()` persists them via `evals/logger.py`. The governance classifier is not.
+There is no `classify_output()` function in the code and no enforcement gate in
+`run()`. The `agent_outputs.governance_class` column exists (added in
+`db/migration_001.sql`) and defaults to `READ_ONLY`, but nothing in the code ever
+writes it — so every output is `READ_ONLY` purely by that column default. No gate
+is needed yet: all six agents are READ_ONLY (they fetch, summarize, and post —
+none take an external action). See `docs/governance.md` for the intended design.
 
-Everything an agent shares — run logging, memory write, the governance gate, the
-Discord notify, error handling — lives in `BaseAgent.run()`. Each agent only
+Everything an agent shares — run logging, memory write, eval-result persistence,
+the Discord notify, error handling — lives in `BaseAgent.run()`. Each agent only
 implements `execute()`. That's the one structural decision the whole thing rests
 on: the orchestration is identical across agents, so adding an agent is writing
 one method, not re-wiring the plumbing. The cost is that `run()` is now the most
@@ -102,10 +109,13 @@ problem, and I always know which kind of failure I'm looking at.
 ## How I know it's working
 
 The eval layer (see `docs/evals/`) is what turns "it ran" into "it ran correctly."
-Two tiers: deterministic checks that don't need a model (schema validity, every
-input email accounted for, the arithmetic reconciles) and a narrow LLM judge for
-the things assertions can't reach (is this summary faithful, is this "urgent"
-actually urgent). Results write to a record keyed per run, so I get a trend line.
+Two tiers are designed. Tier 1 — deterministic checks that don't need a model
+(schema validity, every input email accounted for, the arithmetic reconciles) —
+is implemented in `evals/checks.py` and runs on every governed agent. Tier 2 — a
+narrow LLM judge for the things assertions can't reach (is this summary faithful,
+is this "urgent" actually urgent) — is **designed but not yet implemented**; no
+judge code exists today. Tier 1 results write to a record keyed per run, so I get
+a trend line.
 That trend is the real asset as the individual outputs are disposable, but the
 record of how well the system has been doing is the thing I'd protect and the thing
 that tells me whether a change helped or hurt.

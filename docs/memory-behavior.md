@@ -44,9 +44,11 @@ confirms the claim is real.
 
 ## scoped retrieval, not "recent stuff"
 
-The current `recall_memory()` falls back to most-recent outputs when embeddings
-aren't available, and otherwise does a similarity search across all of an agent's
-history. That's too blunt. Two refinements:
+The current `recall_memory()` does a similarity search across all of an agent's
+history. There is **no most-recent-outputs fallback**: on any retrieval failure
+(embedding error or the similarity lookup failing) it returns
+`"No prior context available."` and nothing else. That all-or-nothing retrieval
+is too blunt. Two refinements:
 
 - **Source scoping.** ISW context should retrieve ISW history, market context
   should retrieve market history. A summary's relevance is mostly determined by

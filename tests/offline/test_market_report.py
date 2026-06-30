@@ -12,7 +12,7 @@ Two modes:
   python test_market_report.py --live
       ⚠️  LIVE smoke test — NOT free. Runs the full agent.run():
         • reads holdings from Supabase
-        • hits Alpha Vantage for quotes + news (consumes daily quota)
+        • hits yfinance for quotes + news
         • calls Claude (billed)
         • posts the report to the market-report Discord webhook
         • inserts Supabase rows + a Voyage embedding
