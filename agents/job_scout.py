@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.base import BaseAgent, AgentResult                    # noqa: E402
 from config.companies import COMPANIES, SEARCH_QUERY              # noqa: E402
+from evals.checks import run_job_scout_checks                     # noqa: E402
 from integrations.job_boards import fetch_company_jobs            # noqa: E402
 from integrations.discord_notify import notify_raw, notify_error  # noqa: E402
 
@@ -380,6 +381,16 @@ class JobScoutAgent(BaseAgent):
         # STEP 4 — collapse the same role posted across multiple cities into one
         # entry (seen_jobs already recorded every individual posting above).
         deduped = dedup_multi_location(new_jobs)
+
+        # Tier 1 eval: assert the postings we're about to surface have no
+        # duplicate job_ids. We check `deduped` — the exact set that goes to
+        # Discord — because that is what the user actually sees; a duplicate
+        # surviving all the way to here is the failure that would double-notify
+        # them. Stashing on self._eval_results lets base.py run() persist the
+        # result and mark the run's eval_status, the same hook every other agent
+        # uses. Before this, job-scout set nothing and showed eval_status
+        # 'no_checks'; now it has honest (if minimal) coverage.
+        self._eval_results = run_job_scout_checks(deduped)
 
         # STEP 5 — Discord. One message per new posting, or a single line when
         # there's nothing new today.

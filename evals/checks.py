@@ -308,3 +308,40 @@ def run_weekly_checks(output: WeeklyOutput) -> List[dict]:
             {"check": name, "tier": 1, "passed": passed, "message": msg}
         )
     return results
+
+
+# ── Job scout ────────────────────────────────────────────────────────────────
+
+def check_job_scout_no_duplicates(jobs: List[dict]) -> Tuple[bool, str]:
+    """
+    Tier 1 — no duplicate job_ids in a single run's surfaced postings.
+
+    WHY this is the right check for job-scout: unlike the other agents, job-scout
+    produces no Pydantic-validated structured output to assert numeric/schema
+    properties on — it works on plain dicts and its core job is deduplication
+    (against seen_jobs across companies, then collapsing the same role across
+    cities). The most likely *silent* failure mode is that dedup logic letting
+    the same posting through twice, which would double-notify the user without
+    raising any error. So we check exactly that invariant: every job_id surfaced
+    in this run is unique. It's deliberately simple — one honest check beats zero
+    coverage, and it targets the failure that would actually happen.
+    """
+    seen: dict = {}
+    for j in jobs:
+        jid = j.get("job_id")
+        seen[jid] = seen.get(jid, 0) + 1
+
+    duplicated = sorted(jid for jid, count in seen.items() if count > 1)
+    if duplicated:
+        return False, f"{len(duplicated)} duplicate job_id(s): {duplicated[:5]}"
+    return True, f"all {len(jobs)} job(s) have unique job_id"
+
+
+def run_job_scout_checks(jobs: List[dict]) -> List[dict]:
+    """
+    Run every Tier 1 job-scout check and return the flat list-of-dicts shape the
+    eval logger writes to Supabase. (One check today; structured as a runner like
+    the other agents so adding checks later is a one-line change.)
+    """
+    passed, msg = check_job_scout_no_duplicates(jobs)
+    return [{"check": "no_duplicates", "tier": 1, "passed": passed, "message": msg}]

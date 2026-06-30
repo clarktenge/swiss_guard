@@ -134,6 +134,21 @@ class BaseAgent(ABC):
                 from evals.logger import log_eval_results
                 log_eval_results(run_id, self.agent_id, self._eval_results)
 
+            # Roll the per-check results up into a single agent_runs.eval_status
+            # so the run can be filtered/graphed without joining eval_results.
+            # WHY three distinct values (not just passed/failed): a run with no
+            # checks at all is NOT the same as a run that passed. If we collapsed
+            # "no checks" into "passed", an agent with zero eval coverage (today,
+            # job-scout) would look identical to a fully-vetted run — exactly the
+            # blind spot eval tracking is meant to remove. 'no_checks' makes the
+            # absence of coverage visible instead of flattering it.
+            if not self._eval_results:
+                eval_status = "no_checks"
+            elif all(r["passed"] for r in self._eval_results):
+                eval_status = "passed"
+            else:
+                eval_status = "failed"
+
             notify(self.agent_id, result.content, embed=result.embed)
 
             # Some agents (market-report) attach a long narrative that doesn't
@@ -148,6 +163,11 @@ class BaseAgent(ABC):
                 "input_tokens": self.input_tokens,
                 "output_tokens": self.output_tokens,
                 "estimated_cost_usd": self._estimated_cost_usd(),
+                # The rolled-up eval verdict computed above. 'status' says the
+                # agent ran without crashing; 'eval_status' says whether what it
+                # produced passed its checks — a run can be a technical success
+                # but an eval failure, which is why these are separate columns.
+                "eval_status": eval_status,
             }).eq("id", run_id).execute()
 
             print(
@@ -296,6 +316,33 @@ class BaseAgent(ABC):
         except Exception as e:
             print(f"[{self.agent_id}] Embedding failed, saving without vector: {e}")
 
+        # Derive the real eval_passed value for the agent_outputs column.
+        # WHY here: until now eval_passed lived only informally inside the
+        # metadata jsonb (each agent set metadata["eval_passed"] by hand). That
+        # made it unqueryable without digging into JSON and easy to forget. We
+        # now compute the canonical boolean directly from self._eval_results —
+        # the same list base.py already persists row-by-row to eval_results — so
+        # the column and the per-check rows can never disagree.
+        #   - all checks passed -> True
+        #   - any check failed  -> False
+        #   - no checks ran     -> None (NOT False): "we never looked" is a
+        #     different fact from "we looked and it failed", and the column is
+        #     nullable specifically to carry that distinction honestly. job-scout
+        #     today has no checks, so its rows correctly store NULL here.
+        eval_passed = (
+            all(r["passed"] for r in self._eval_results)
+            if self._eval_results
+            else None
+        )
+
+        # Classify this output's capability class through the real classifier
+        # (agents/governance.py) rather than relying on the column's SQL default.
+        # See that module for why this indirection exists even though every agent
+        # is READ_ONLY today. Imported locally to avoid a circular import:
+        # governance.py imports AgentResult from this module.
+        from agents.governance import classify_output
+        governance_class = classify_output(self.agent_id, result)
+
         self.supabase.table("agent_outputs").insert({
             "id": str(uuid.uuid4()),
             "run_id": run_id,
@@ -304,5 +351,10 @@ class BaseAgent(ABC):
             "embedding": embedding,
             "metadata": result.metadata,
             "structured_output": result.structured_output,
+            # Real governance columns, now populated by code instead of defaults.
+            # The informal metadata["eval_passed"] some agents still set is left
+            # in place for now (nothing reads it yet that we'd break by removing).
+            "eval_passed": eval_passed,
+            "governance_class": governance_class,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
