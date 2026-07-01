@@ -20,6 +20,7 @@ import os
 import sys
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo  # Python 3.9+ stdlib; no extra install needed
 
 # Allow running this file directly (python agents/market_report.py) — the script
 # dir is agents/, so put the project root on the path for the package imports.
@@ -50,6 +51,26 @@ _COLOR_RED = 0xE74C3C
 
 # Discord caps embeds at 25 fields.
 _MAX_EMBED_FIELDS = 25
+
+
+def _is_market_day_and_closed() -> tuple[bool, str]:
+    """
+    Returns (should_run, reason_string).
+    The report should only run on US market days after close.
+    Market is open Mon-Fri 9:30am-4:00pm ET, closed on weekends
+    and US federal holidays.
+    We check: is today a weekday in US Eastern time?
+    If it's Saturday or Sunday in ET, skip the run.
+    Note: we don't check federal holidays here — that's a v2
+    improvement. Weekend check catches the main timing bug.
+    """
+    et_now = datetime.now(ZoneInfo("America/New_York"))
+    weekday = et_now.weekday()  # 0=Monday, 6=Sunday
+    if weekday >= 5:  # Saturday or Sunday in ET
+        return False, f"Market closed — today is {et_now.strftime('%A')} in US Eastern time"
+    if et_now.hour < 16:  # Before 4pm ET
+        return False, f"Market not yet closed — it is {et_now.strftime('%H:%M')} ET"
+    return True, "Market closed for the day"
 
 
 def _fmt_money(value: float) -> str:
@@ -105,6 +126,19 @@ class MarketReportAgent(BaseAgent):
         return "market-report"
 
     def execute(self) -> AgentResult:
+        # 0. Market-open guard. yfinance's day-change figures are only meaningful
+        #    during/right after market hours; on a weekend or before close it
+        #    returns stale data that would be mislabeled with the current date.
+        #    If GitHub fires this at the wrong time, exit cleanly with a logged
+        #    reason instead of posting misleading numbers.
+        should_run, reason = _is_market_day_and_closed()
+        if not should_run:
+            # Return a minimal result rather than crashing.
+            return AgentResult(
+                content=f"📊 Market report skipped: {reason}",
+                metadata={"skipped": True, "reason": reason},
+            )
+
         # 1. Load holdings from Supabase.
         holdings = (
             self.supabase.table("holdings")
@@ -189,8 +223,13 @@ class MarketReportAgent(BaseAgent):
         # 4b. Build the typed MarketReportOutput (numbers from Python, narrative
         #     from Claude) and run the Tier 1 checks. base.py run() persists
         #     self._eval_results via log_eval_results() after _save_output.
+        # Stamp the report with the US Eastern market date so the label matches
+        # the session being reported (a run Monday evening ET reads "Monday,
+        # June 30, 2026", not the next UTC calendar day).
+        et_now = datetime.now(ZoneInfo("America/New_York"))
+        report_date = et_now.strftime("%A, %B %d, %Y")
         output = MarketReportOutput(
-            date=datetime.now().date().isoformat(),
+            date=report_date,
             portfolio_value=round(total_value, 2),
             day_pnl=round(total_day_pnl, 2),
             day_pnl_pct=round(day_pnl_pct, 2),

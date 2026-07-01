@@ -12,6 +12,8 @@ execute() touches, and patch the module-level fetch_quotes / fetch_news and
 call_claude on the class.
 """
 
+from datetime import datetime as real_datetime
+from zoneinfo import ZoneInfo
 from unittest.mock import patch, MagicMock
 
 from agents.schemas import MarketReportOutput, HoldingLine
@@ -123,7 +125,10 @@ def _make_agent() -> MarketReportAgent:
 
 
 def test_execute_builds_structured_output_and_passes_checks():
-    with patch("agents.market_report.fetch_quotes", return_value=FAKE_QUOTES), \
+    # Force the market-open guard open so this test isn't flaky on the wall clock
+    # (it would otherwise early-exit when CI runs on a weekend / before close).
+    with patch("agents.market_report._is_market_day_and_closed", return_value=(True, "open")), \
+         patch("agents.market_report.fetch_quotes", return_value=FAKE_QUOTES), \
          patch("agents.market_report.fetch_news", return_value=FAKE_NEWS), \
          patch.object(MarketReportAgent, "call_claude", return_value=FAKE_NARRATIVE):
         agent = _make_agent()
@@ -142,3 +147,57 @@ def test_execute_builds_structured_output_and_passes_checks():
         # Tier 1 checks ran and all passed.
         assert agent._eval_results
         assert all(r["passed"] for r in agent._eval_results)
+
+
+# ── Market-open guard (timing bug fix) ───────────────────────────────────────
+
+def _fixed_et(year, month, day, hour) -> real_datetime:
+    """A fixed, tz-aware US Eastern datetime for the _is_market_day_and_closed guard."""
+    return real_datetime(year, month, day, hour, 0, tzinfo=ZoneInfo("America/New_York"))
+
+
+def test_skips_on_weekend():
+    # 2026-06-27 is a Saturday in ET → guard should skip.
+    saturday = _fixed_et(2026, 6, 27, 12)
+    with patch("agents.market_report.datetime") as mock_dt:
+        mock_dt.now.return_value = saturday
+        agent = _make_agent()
+        result = agent.execute()
+
+    assert result.metadata.get("skipped") is True
+    assert result.structured_output is None
+    assert "Saturday" in result.metadata["reason"]
+
+
+def test_skips_before_market_close():
+    # Monday 2:00pm ET — market still open (< 4pm) → guard should skip.
+    monday_2pm = _fixed_et(2026, 6, 29, 14)
+    with patch("agents.market_report.datetime") as mock_dt:
+        mock_dt.now.return_value = monday_2pm
+        agent = _make_agent()
+        result = agent.execute()
+
+    assert result.metadata.get("skipped") is True
+    assert result.structured_output is None
+    assert "not yet closed" in result.metadata["reason"]
+
+
+def test_runs_after_close():
+    # Monday 5:00pm ET — weekday, after close → guard passes, full flow runs.
+    monday_5pm = _fixed_et(2026, 6, 29, 17)
+    with patch("agents.market_report.datetime") as mock_dt, \
+         patch("agents.market_report.fetch_quotes", return_value=FAKE_QUOTES), \
+         patch("agents.market_report.fetch_news", return_value=FAKE_NEWS), \
+         patch.object(MarketReportAgent, "call_claude", return_value=FAKE_NARRATIVE):
+        mock_dt.now.return_value = monday_5pm
+        agent = _make_agent()
+        result = agent.execute()
+
+    # Did NOT early-exit: structured output was built and checks ran.
+    assert result.metadata.get("skipped") is None
+    assert result.structured_output is not None
+    assert result.structured_output["narrative"] == FAKE_NARRATIVE
+    assert result.metadata["eval_passed"] is True
+    assert all(r["passed"] for r in agent._eval_results)
+    # BUG 3: date label comes from the ET market session, not the UTC clock.
+    assert result.structured_output["date"] == "Monday, June 29, 2026"

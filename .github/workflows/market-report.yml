@@ -2,8 +2,10 @@ name: market-report
 
 on:
   schedule:
-    # 00:00 UTC on weekdays (5:00 PM PDT previous day)
-    - cron: "0 0 * * 2-6"
+    # 23:17 UTC weekdays = 5:17 PM MDT — after US market close (4 PM EDT = 8 PM
+    # UTC) and on the same calendar day in Mountain time. Off-minutes avoid
+    # GitHub runner congestion on the hour.
+    - cron: "17 23 * * 1-5"
   workflow_dispatch:
 
 jobs:
