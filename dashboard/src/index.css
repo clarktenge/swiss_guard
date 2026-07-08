@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #0f1117;
+  color: #e5e7eb;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Thin, dark scrollbars so panels feel native to the theme */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #1e2736 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #1e2736;
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #2b3752;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* Whole-room click target with a faint hover wash so rooms feel interactive. */
+.room-hit {
+  fill: #ffffff;
+  fill-opacity: 0;
+  transition: fill-opacity 0.15s ease;
+  cursor: pointer;
+}
+.room-hit:hover {
+  fill-opacity: 0.035;
+}
