@@ -19,6 +19,7 @@ from unittest.mock import patch, MagicMock
 from agents.schemas import MarketReportOutput, HoldingLine
 from evals.checks import (
     check_market_numeric_consistency,
+    check_market_day_pnl_consistency,
     check_market_narrative_not_empty,
     run_market_checks,
 )
@@ -36,10 +37,12 @@ FAKE_NARRATIVE = (
 
 
 def _holdings() -> list[HoldingLine]:
+    # prev_close is chosen so day_pnl == shares * (price - prev_close):
+    #   AAPL: 100 * (110 - 108) = +200 ; NVDA: 10 * (200 - 210) = -100.
     return [
-        HoldingLine(ticker="AAPL", shares=100.0, price=110.0,
+        HoldingLine(ticker="AAPL", shares=100.0, price=110.0, prev_close=108.0,
                     day_change_pct=1.85, day_pnl=200.0, total_pnl=1000.0),
-        HoldingLine(ticker="NVDA", shares=10.0, price=200.0,
+        HoldingLine(ticker="NVDA", shares=10.0, price=200.0, prev_close=210.0,
                     day_change_pct=-4.76, day_pnl=-100.0, total_pnl=-500.0),
     ]
 
@@ -77,6 +80,45 @@ def test_numeric_consistency_fails_on_mismatched_portfolio_value():
     passed, msg = check_market_numeric_consistency(output)
     assert passed is False
     assert "does not match" in msg
+
+
+def test_day_pnl_consistency_passes_on_valid_output():
+    # Per-holding day_pnl sums to the portfolio day_pnl (200 - 100 = 100) and each
+    # line reconciles with shares * (price - prev_close).
+    passed, msg = check_market_day_pnl_consistency(_valid_output())
+    assert passed is True, msg
+
+    # And it's surfaced through the roll-up.
+    results = run_market_checks(_valid_output())
+    day = [r for r in results if r["check"] == "day_pnl_consistency"]
+    assert day and day[0]["passed"] is True
+
+
+def test_day_pnl_consistency_fails_on_mismatched_portfolio_total():
+    # Per-holding day_pnl still sums to 100; claim a different portfolio day_pnl.
+    output = _valid_output(day_pnl=250.0)
+    passed, msg = check_market_day_pnl_consistency(output)
+    assert passed is False
+    assert "does not match sum of per-holding" in msg
+
+
+def test_day_pnl_consistency_fails_on_stale_prev_close():
+    # The exact bug this check exists for: a per-holding day_pnl derived from a
+    # different (stale/rolled-forward) prev_close than the displayed price. Here
+    # AAPL's prev_close is bumped to today's price so the true move is 0, but the
+    # day_pnl still claims +200 — portfolio_value (price-only) would pass, this
+    # must not.
+    stale = [
+        HoldingLine(ticker="AAPL", shares=100.0, price=110.0, prev_close=110.0,
+                    day_change_pct=1.85, day_pnl=200.0, total_pnl=1000.0),
+        HoldingLine(ticker="NVDA", shares=10.0, price=200.0, prev_close=210.0,
+                    day_change_pct=-4.76, day_pnl=-100.0, total_pnl=-500.0),
+    ]
+    output = _valid_output(holdings=stale)
+    passed, msg = check_market_day_pnl_consistency(output)
+    assert passed is False
+    assert "AAPL" in msg
+    assert "shares * (price - prev_close)" in msg
 
 
 def test_narrative_not_empty_fails_on_empty_narrative():

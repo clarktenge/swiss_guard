@@ -224,6 +224,43 @@ def check_market_numeric_consistency(output: MarketReportOutput) -> Tuple[bool, 
     return True, "Portfolio value consistency check passed"
 
 
+def check_market_day_pnl_consistency(output: MarketReportOutput) -> Tuple[bool, str]:
+    """
+    Tier 1 — day-P&L consistency. day_pnl is computed in Python (Claude only
+    writes the narrative), so it must reconcile two ways:
+
+      1. the portfolio day_pnl equals the sum of the per-holding day_pnl, and
+      2. each holding's day_pnl equals shares * (price - prev_close) — i.e. the
+         day P&L and the displayed price rest on the SAME previous close.
+
+    The second binding is the one check_market_numeric_consistency can't provide:
+    portfolio_value depends only on price, so a day_pnl derived from a different
+    (e.g. stale/rolled-forward) prev_close than the shown price would otherwise
+    pass every existing check while contradicting the prices in the report. A
+    0.01 tolerance absorbs the per-line penny rounding on day_pnl.
+    """
+    # 1. Portfolio total vs. sum of the per-holding day P&L.
+    summed = sum(h.day_pnl for h in output.holdings)
+    if abs(summed - output.day_pnl) > 0.01:
+        return False, (
+            f"day_pnl {output.day_pnl:.2f} does not match sum of per-holding "
+            f"day_pnl {summed:.2f}"
+        )
+
+    # 2. Each holding's day P&L vs. shares * (price - prev_close). price and
+    #    prev_close are stored unrounded, so the only slack is the cent-rounding
+    #    of day_pnl itself; 0.01 covers it regardless of share count.
+    for h in output.holdings:
+        expected = h.shares * (h.price - h.prev_close)
+        if abs(expected - h.day_pnl) > 0.01:
+            return False, (
+                f"{h.ticker} day_pnl {h.day_pnl:.2f} does not match "
+                f"shares * (price - prev_close) {expected:.2f}"
+            )
+
+    return True, "Day P&L consistency check passed"
+
+
 def check_market_narrative_not_empty(output: MarketReportOutput) -> Tuple[bool, str]:
     """
     Tier 1 — narrative content. The whole point of asking Claude is the
@@ -243,6 +280,7 @@ def run_market_checks(output: MarketReportOutput) -> List[dict]:
     results = []
     for fn, name in [
         (check_market_numeric_consistency, "numeric_consistency"),
+        (check_market_day_pnl_consistency, "day_pnl_consistency"),
         (check_market_narrative_not_empty, "narrative_not_empty"),
     ]:
         passed, msg = fn(output)

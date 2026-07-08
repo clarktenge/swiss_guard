@@ -13,14 +13,50 @@ yfinance notes:
   - Quotes come from Ticker.fast_info (lastPrice / previousClose). News comes
     from Ticker.news, whose payload is nested under each item's "content" key in
     current yfinance versions.
+  - fast_info["previousClose"] is unreliable for day P&L: once a session ends it
+    can roll forward to *today's* close, which would zero out the day's move. So
+    prev_close is sourced from the daily history (the unambiguous close of the
+    most recent trading day before today) and only falls back to fast_info's
+    value when history is unavailable. See _reliable_prev_close.
 
 SECURITY: news titles/summaries are third-party content. The agent treats them
 as untrusted data when handing them to Claude (see BaseAgent.call_claude).
 """
 
+from datetime import date, datetime
 from typing import List, Dict
+from zoneinfo import ZoneInfo
 
 import yfinance as yf
+
+
+def _reliable_prev_close(
+    ticker_obj: "yf.Ticker", today_et: date, fallback: float
+) -> float:
+    """
+    Return a trustworthy previous close for the day-P&L math.
+
+    fast_info["previousClose"] can roll forward to today's close once the regular
+    session ends — pairing it with today's lastPrice then yields day_pnl ~= 0 even
+    on a big mover. The daily history is unambiguous, so we take the close of the
+    most recent trading day strictly *before* today's US Eastern date. This holds
+    whether or not today's bar has posted yet (if it hasn't, the last bar already
+    IS the previous close).
+
+    auto_adjust=False keeps 'Close' as the raw close so it's on the same
+    (unadjusted) basis as fast_info's lastPrice — an adjusted close would mismatch
+    on/after ex-dividend dates. Falls back to `fallback` (fast_info's
+    previousClose) if history is unavailable (e.g. Yahoo throttling).
+    """
+    try:
+        hist = ticker_obj.history(period="7d", interval="1d", auto_adjust=False)
+        closes = hist["Close"].dropna()
+        for ts, close in zip(reversed(closes.index), reversed(closes.values)):
+            if ts.date() < today_et:
+                return float(close)
+    except Exception as e:
+        print(f"[stocks] history() previous-close lookup failed: {e}")
+    return fallback
 
 
 def fetch_quotes(tickers: List[str]) -> Dict[str, dict]:
@@ -43,10 +79,12 @@ def fetch_quotes(tickers: List[str]) -> Dict[str, dict]:
     skipped, so the caller should not assume every input ticker is present.
     """
     quotes: Dict[str, dict] = {}
+    today_et = datetime.now(ZoneInfo("America/New_York")).date()
 
     for ticker in tickers:
         try:
-            info = yf.Ticker(ticker).fast_info
+            tk = yf.Ticker(ticker)
+            info = tk.fast_info
             price = info.get("lastPrice")
             prev_close = info.get("previousClose")
         except Exception as e:
@@ -60,7 +98,10 @@ def fetch_quotes(tickers: List[str]) -> Dict[str, dict]:
             continue
 
         price = float(price)
-        prev_close = float(prev_close)
+        # Prefer the daily-history previous close over fast_info's, which can roll
+        # forward after the close and zero out the day's P&L. fast_info's value is
+        # the fallback if history is unavailable.
+        prev_close = _reliable_prev_close(tk, today_et, fallback=float(prev_close))
         change = price - prev_close
         change_percent = (change / prev_close * 100) if prev_close else 0.0
 

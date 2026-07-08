@@ -72,6 +72,10 @@ class HoldingLine(BaseModel):
     ticker: str
     shares: float
     price: float
+    # The previous close day_pnl and day_change_pct are measured against. Recorded
+    # explicitly (not just implied) so the eval layer can verify day_pnl rests on
+    # the SAME baseline as the displayed price — see check_market_day_pnl_consistency.
+    prev_close: float
     day_change_pct: float
     day_pnl: float
     total_pnl: float

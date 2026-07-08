@@ -110,6 +110,7 @@ def _compute_holding(holding: dict, quote: dict) -> dict:
         "shares": shares,
         "avg_cost": avg_cost,
         "price": price,
+        "prev_close": prev_close,
         "day_change_pct": quote["change_percent"],
         "market_value": market_value,
         "cost_basis": cost_basis,
@@ -240,7 +241,11 @@ class MarketReportAgent(BaseAgent):
                 HoldingLine(
                     ticker=r["ticker"],
                     shares=r["shares"],
+                    # price and prev_close stay unrounded so the day_pnl check can
+                    # reconcile shares * (price - prev_close) against the per-line
+                    # day_pnl within tolerance (same reasoning as price above).
                     price=r["price"],
+                    prev_close=r["prev_close"],
                     day_change_pct=round(r["day_change_pct"], 2),
                     day_pnl=round(r["day_pnl"], 2),
                     total_pnl=round(r["total_pnl"], 2),
