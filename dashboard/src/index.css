@@ -42,13 +42,23 @@ body {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
 }
 
-/* Whole-room click target with a faint hover wash so rooms feel interactive. */
-.room-hit {
+/* Isometric apartment rooms: hover brightens the room and reveals a warm
+   outline; the transparent hit polygon on top carries the click + pointer. */
+.iso-room {
+  transition: filter 0.18s ease;
+}
+.iso-room:hover {
+  filter: brightness(1.09);
+}
+.iso-room .room-outline {
+  stroke: transparent;
+  transition: stroke 0.18s ease;
+}
+.iso-room:hover .room-outline {
+  stroke: rgba(255, 240, 214, 0.7);
+}
+.iso-hit {
   fill: #ffffff;
   fill-opacity: 0;
-  transition: fill-opacity 0.15s ease;
   cursor: pointer;
-}
-.room-hit:hover {
-  fill-opacity: 0.035;
 }
