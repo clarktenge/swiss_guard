@@ -146,6 +146,24 @@ def test_discord_content_is_not_empty():
                 assert "urgent" in lowered or "opportunities" in lowered
 
 
+def test_two_json_blocks_extracts_first_only():
+    # Claude's self-correction failure mode: one complete JSON object, prose,
+    # then a second object. clean_json_response must extract only the first so
+    # execute() succeeds instead of hitting an "Extra data" parse error.
+    empty_buckets = ('{"urgent":[],"opportunities":[],"sales":[],'
+                     '"updates":[],"uncategorized":[]}')
+    two_blocks = f"{empty_buckets}\nLet me redo this.\n{empty_buckets}"
+    with patch("agents.email_triage.notify_error"):
+        with patch("agents.email_triage.list_recent_emails",
+                   return_value=FAKE_EMAILS[:1]):
+            with patch.object(EmailTriageAgent, "call_claude",
+                              return_value=two_blocks):
+                agent = _make_agent()
+                result = agent.execute()  # must not raise on the second block
+
+                assert result.structured_output is not None
+
+
 def test_code_fence_stripped_before_parse():
     fenced_json = f"```json\n{VALID_TRIAGE_JSON}\n```"
     with patch("agents.email_triage.notify_error"):

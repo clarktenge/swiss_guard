@@ -38,6 +38,7 @@ from typing import Dict, List
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.base import BaseAgent, AgentResult        # noqa: E402
+from agents.json_utils import strip_code_fences, clean_json_response  # noqa: E402
 from agents.schemas import WeeklyOutput               # noqa: E402
 from evals.checks import run_weekly_checks            # noqa: E402
 
@@ -77,32 +78,9 @@ based on what happened this week. Plain text only.
 """
 
 
-# ── JSON parsing helpers (match email_triage's pattern) ──────────────────────
-
-def _strip_code_fences(text: str) -> str:
-    """
-    Defensively unwrap a ```json … ``` (or bare ``` … ```) fence if Claude adds
-    one despite being asked for raw JSON. Leaves clean JSON untouched.
-    """
-    s = text.strip()
-    if s.startswith("```"):
-        # Drop the opening fence line (``` or ```json) and the trailing fence.
-        s = s.split("\n", 1)[1] if "\n" in s else s
-        if s.rstrip().endswith("```"):
-            s = s.rstrip()[: -len("```")]
-    return s.strip()
-
-
-def _clean_json_response(text: str) -> str:
-    """
-    Trim anything Claude tucked outside the JSON object — a stray sentence
-    before the opening brace or a sign-off after the closing one — so json.loads
-    sees only the object. Run after _strip_code_fences. Leaves the text
-    untouched if it can't find a brace pair to slice on.
-    """
-    if "{" in text and "}" in text:
-        text = text[text.index("{"): text.rindex("}") + 1]
-    return text.strip()
+# ── JSON parsing helpers ─────────────────────────────────────────────────────
+# strip_code_fences / clean_json_response live in agents/json_utils.py — shared
+# with email_triage and email_digest.
 
 
 # ── Numeric extraction helpers (pure — unit-testable offline) ────────────────
@@ -352,7 +330,7 @@ class WeeklyReportAgent(BaseAgent):
         )
 
         try:
-            data = json.loads(_clean_json_response(_strip_code_fences(body)))
+            data = json.loads(clean_json_response(strip_code_fences(body)))
             # Validate the shape up front so a missing key surfaces here rather
             # than as a confusing KeyError deeper in WeeklyOutput construction.
             return {

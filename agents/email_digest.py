@@ -31,6 +31,7 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.base import BaseAgent, AgentResult                      # noqa: E402
+from agents.json_utils import strip_code_fences, clean_json_response  # noqa: E402
 from agents.schemas import DigestOutput                             # noqa: E402
 from evals.checks import run_digest_checks                          # noqa: E402
 from integrations.gmail import list_recent_emails, get_email_body   # noqa: E402
@@ -113,28 +114,10 @@ title must be the email subject line, plain text only.
 
 
 # ── Rendering / parsing helpers ──────────────────────────────────────────────
-
-def _strip_code_fences(text: str) -> str:
-    """
-    Defensively unwrap a ```json … ``` (or bare ``` … ```) fence if Claude adds
-    one despite being asked for raw JSON. Leaves clean JSON untouched.
-    """
-    s = text.strip()
-    if s.startswith("```"):
-        # Drop the opening fence line (``` or ```json) and the trailing fence.
-        s = s.split("\n", 1)[1] if "\n" in s else s
-        if s.rstrip().endswith("```"):
-            s = s.rstrip()[: -len("```")]
-    return s.strip()
-
-
-def _clean_json_response(text: str) -> str:
-    """
-    Trim anything Claude tucked outside the JSON object — a stray sentence
-    before the opening brace or a sign-off after the closing one — so
-    model_validate_json sees only the object. Run after _strip_code_fences.
-    """
-    return text[text.index("{"): text.rindex("}") + 1]
+# JSON extraction (strip_code_fences, clean_json_response) lives in
+# agents/json_utils.py — shared with email_triage and weekly_report. The old
+# local copy here lacked the brace-existence guard and used the rindex slice
+# that spanned two JSON blocks; importing the shared version fixes both.
 
 
 # Sections in display order, with the emoji headings the digest has always used.
@@ -256,7 +239,7 @@ class EmailDigestAgent(BaseAgent):
         # error rather than silently posting garbage.
         try:
             digest_output = DigestOutput.model_validate_json(
-                _clean_json_response(_strip_code_fences(response_text))
+                clean_json_response(strip_code_fences(response_text))
             )
         except Exception as e:
             notify_error(

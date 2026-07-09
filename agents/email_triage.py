@@ -25,6 +25,7 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.base import BaseAgent, AgentResult            # noqa: E402
+from agents.json_utils import strip_code_fences, clean_json_response  # noqa: E402
 from agents.schemas import TriageOutput, EmailItem, SaleItem  # noqa: E402
 from evals.checks import run_all_checks                    # noqa: E402
 from integrations.gmail import list_recent_emails          # noqa: E402
@@ -107,35 +108,17 @@ Your response must match this exact structure:
 }
 Every input email_id must appear in exactly one bucket.
 reason must be one short sentence with no quotes or special characters.
-brand (sales only) must be the sender brand name only, no other text."""
+brand (sales only) must be the sender brand name only, no other text.
+
+Output exactly one JSON object and nothing else. Do not include any explanatory
+text before or after the JSON. Do not revise or correct yourself mid-response —
+if you make a mistake in your first JSON object, the downstream parser will
+handle it. Output your best single attempt and stop."""
 
 
 # ── Rendering / parsing helpers ──────────────────────────────────────────────
-
-def _strip_code_fences(text: str) -> str:
-    """
-    Defensively unwrap a ```json … ``` (or bare ``` … ```) fence if Claude adds
-    one despite being asked for raw JSON. Leaves clean JSON untouched.
-    """
-    s = text.strip()
-    if s.startswith("```"):
-        # Drop the opening fence line (``` or ```json) and the trailing fence.
-        s = s.split("\n", 1)[1] if "\n" in s else s
-        if s.rstrip().endswith("```"):
-            s = s.rstrip()[: -len("```")]
-    return s.strip()
-
-
-def _clean_json_response(text: str) -> str:
-    """
-    Trim anything Claude tucked outside the JSON object — a stray sentence
-    before the opening brace or a sign-off after the closing one — so
-    model_validate_json sees only the object. Run after _strip_code_fences.
-    Leaves the text untouched if it can't find a brace pair to slice on.
-    """
-    if "{" in text and "}" in text:
-        text = text[text.index("{"): text.rindex("}") + 1]
-    return text.strip()
+# JSON extraction (strip_code_fences, clean_json_response) lives in
+# agents/json_utils.py — shared with email_digest and weekly_report.
 
 
 def _sanitize_email(email: dict) -> dict:
@@ -177,7 +160,7 @@ def _build_triage_output(claude_response: str, emails_by_id: dict) -> TriageOutp
     Raises (json.JSONDecodeError / ValidationError / KeyError) on a bad
     response so execute() can mark the run as an error rather than post garbage.
     """
-    data = json.loads(_clean_json_response(_strip_code_fences(claude_response)))
+    data = json.loads(clean_json_response(strip_code_fences(claude_response)))
 
     def base_fields(item: dict) -> dict:
         original = emails_by_id.get(item["email_id"], {})
@@ -327,7 +310,13 @@ class EmailTriageAgent(BaseAgent):
         except Exception as e:
             # A response cut off by max_tokens won't end in the closing brace;
             # point at the budget rather than the schema so the fix is obvious.
-            cleaned = _clean_json_response(_strip_code_fences(response_text))
+            # clean_json_response now raises when it can't find a balanced
+            # object; fall back to the fenced text so we don't mask the real
+            # parse error while building the diagnostic.
+            try:
+                cleaned = clean_json_response(strip_code_fences(response_text))
+            except ValueError:
+                cleaned = strip_code_fences(response_text)
             truncated = len(cleaned) > 100 and not cleaned.rstrip().endswith("}")
             hint = (
                 " (response appears truncated — increase max_tokens or reduce batch)"
