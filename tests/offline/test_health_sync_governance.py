@@ -9,8 +9,9 @@ file is safe for CI.
 
 Same pattern as test_email_triage_governance: build the agent with __new__ (skips
 BaseAgent.__init__, which would construct the API clients), stub the attributes
-execute() touches, patch the module-level get_recent_activities, patch
-_load_prior_week_stats, and patch call_claude on the class.
+execute() touches, patch the module-level get_recent_activities, stub the Garmin
+recovery-metrics fetch to keep the test offline, patch _load_prior_week_stats,
+and patch call_claude on the class.
 """
 
 from unittest.mock import patch, MagicMock
@@ -20,7 +21,8 @@ from agents.health_sync import HealthSyncAgent
 
 # ── Fake data ────────────────────────────────────────────────────────────────
 
-# Normalized Strava activities (the shape integrations.strava produces).
+# Normalized Garmin activities (the shape integrations.garmin.get_recent_activities
+# produces — same compact imperial shape the agent has always consumed).
 FAKE_ACTIVITIES = [
     {"id": 1, "name": "Morning Run", "type": "Run",
      "date": "2026-06-24T07:00:00", "distance_mi": 5.0, "moving_time_s": 2400,
@@ -37,15 +39,16 @@ def _make_agent() -> HealthSyncAgent:
     """
     Build a HealthSyncAgent without running BaseAgent.__init__ (which would spin
     up the Anthropic/Supabase/Voyage clients). Stub the attributes execute() and
-    the run() eval hook read. Garmin is disabled so no live call is attempted.
+    the run() eval hook read. The Garmin recovery-metrics fetch is stubbed to
+    return None so no live call is attempted (activities come from the patched
+    module-level get_recent_activities).
     """
     agent = HealthSyncAgent.__new__(HealthSyncAgent)
     agent._eval_results = []
     agent.supabase = MagicMock()
     agent.voyage = MagicMock()
     agent.anthropic = MagicMock()
-    agent.garmin_data = None
-    agent.fetch_garmin = False
+    agent._fetch_garmin_metrics = lambda: None
     return agent
 
 
@@ -106,8 +109,8 @@ def test_vs_last_week_distance_computed():
 
 
 def test_empty_week_still_builds_output():
-    # No Strava activities and no Garmin → early return, but governance still
-    # produces a structured output and runs the Tier 1 check.
+    # No Garmin activities and no recovery metrics → early return, but governance
+    # still produces a structured output and runs the Tier 1 check.
     with patch("agents.health_sync.get_recent_activities", return_value=[]):
         with patch.object(HealthSyncAgent, "_load_prior_week_stats",
                           return_value=None):

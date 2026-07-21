@@ -6,10 +6,10 @@
 #      run on import and assert, so `python test_health_sync.py` fails loudly if
 #      the weekly rollup logic regresses.
 #
-#   2. ⚠️  LIVE smoke test (guarded below): hits the real Strava API, calls
-#      Claude (billed), and — via run() — embeds with Voyage + writes Supabase
-#      rows + posts to the health-sync Discord webhook. Off by default; flip
-#      RUN_LIVE = True (or pass `live` on the command line) to exercise it.
+#   2. ⚠️  LIVE smoke test (guarded below): hits the real Garmin Connect API,
+#      calls Claude (billed), and — via run() — embeds with Voyage + writes
+#      Supabase rows + posts to the health-sync Discord webhook. Off by default;
+#      flip RUN_LIVE = True (or pass `live` on the command line) to exercise it.
 #
 # Run:  python test_health_sync.py          # offline checks only
 #       python test_health_sync.py live      # offline checks + live run()
@@ -34,8 +34,8 @@ from agents.health_sync import (
 def _sample_activities():
     """
     Two runs (with HR) + one ride (no HR) — enough to cover every branch.
-    Distances are in miles / feet, matching the imperial shape the Strava
-    integration now emits.
+    Distances are in miles / feet, matching the imperial shape the Garmin
+    integration emits.
     """
     return [
         {
@@ -151,12 +151,12 @@ def run_offline_checks():
 
 # ── Part 2: live smoke tests (opt-in) ───────────────────────────────────────
 #
-#   live    — full combined pipeline: Strava + Garmin (both live) + Claude,
+#   live    — full pipeline: Garmin workouts + recovery metrics (live) + Claude,
 #             then run()'s side effects (Discord + Supabase).
-#   combo   — combined OUTPUT preview with NO side effects: pulls Strava live,
-#             INJECTS sample Garmin metrics (so it works even without a Garmin
-#             session), calls Claude, and prints the markdown. Cheaper way to
-#             eyeball that the recovery section renders from Garmin data.
+#   combo   — combined OUTPUT preview with NO side effects: pulls Garmin workouts
+#             live, INJECTS sample recovery metrics (so the recovery section has
+#             data even on a no-wear day), calls Claude, and prints the markdown.
+#             Cheaper way to eyeball that the recovery section renders.
 
 RUN_LIVE = False  # flip to True, or pass `live` / `combo` on the command line
 
@@ -164,8 +164,8 @@ RUN_LIVE = False  # flip to True, or pass `live` / `combo` on the command line
 def run_live():
     from agents.health_sync import HealthSyncAgent
 
-    print("\n⚠️  Running LIVE health-sync (Strava + Garmin + Claude + Discord + Supabase)…\n")
-    agent = HealthSyncAgent()  # pulls both Strava + Garmin live
+    print("\n⚠️  Running LIVE health-sync (Garmin + Claude + Discord + Supabase)…\n")
+    agent = HealthSyncAgent()  # pulls Garmin workouts + recovery metrics live
 
     # run() = full pipeline (execute → Supabase logging → Discord post).
     # Swap for agent.execute() to preview the markdown with no side effects.
@@ -175,24 +175,26 @@ def run_live():
 
 
 def run_combined_preview():
-    """Combined output (Strava live + injected Garmin), no side effects."""
+    """Combined output (Garmin workouts live + injected recovery metrics), no side effects."""
     from agents.health_sync import HealthSyncAgent
 
-    print("\n⚠️  Previewing COMBINED output (Strava live + sample Garmin + Claude)…\n")
-    # Inject Garmin metrics so the recovery section has data to work with even
-    # without a live Garmin session; execute() then skips the live Garmin call.
-    agent = HealthSyncAgent(garmin_data=_sample_garmin_metrics())
+    print("\n⚠️  Previewing COMBINED output (Garmin workouts live + sample recovery + Claude)…\n")
+    # Inject recovery metrics so the recovery section has data to work with even
+    # on a no-wear day; the workout side is still pulled live from Garmin. We stub
+    # the recovery fetch directly since the agent no longer takes a constructor arg.
+    agent = HealthSyncAgent()
+    agent._fetch_garmin_metrics = lambda: _sample_garmin_metrics()
 
     result = agent.execute()  # no Supabase / Discord / embedding side effects
-    assert result.metadata.get("has_garmin") is True, "Garmin data didn't reach the agent"
+    assert result.metadata.get("has_garmin") is True, "Garmin recovery data didn't reach the agent"
 
     content = result.content
-    # The combined briefing should carry both sources through to the markdown:
-    # the Python-rendered Strava stats line and Claude's recovery read.
+    # The combined briefing should carry both sides through to the markdown:
+    # the Python-rendered workout stats line and Claude's recovery read.
     assert "Health sync" in content
     print(f"[has_garmin={result.metadata.get('has_garmin')}]\n")
     print(content)
-    print("\n✓ combined preview rendered (Strava stats + Garmin recovery)")
+    print("\n✓ combined preview rendered (workout stats + recovery)")
 
 
 if __name__ == "__main__":

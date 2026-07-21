@@ -1,5 +1,5 @@
 """
-health_sync — pulls the last 7 days of Strava workouts, computes the weekly
+health_sync — pulls the last 7 days of Garmin workouts, computes the weekly
 stats in Python, and asks Claude to synthesize a short briefing. Returns clean
 markdown ready to post to Discord.
 
@@ -9,23 +9,22 @@ the figures are always correct and reproducible. Claude only writes prose around
 those figures — yesterday's session, weekly progress, a recovery read, and one
 actionable note.
 
-Two sources, two jobs:
-  - Strava is the source of truth for WORKOUTS (what you did) — the weekly load
-    and yesterday's session come from here.
-  - Garmin supplies the RECOVERY metrics Strava doesn't have (how you feel):
-    sleep, HRV, body battery, resting HR, steps, stress.
+One source (Garmin Connect), two jobs — the device syncs both directly:
+  - WORKOUTS (what you did) — the weekly load and yesterday's session, from
+    get_recent_activities(). This is the source of truth for training.
+  - RECOVERY metrics (how you feel) — sleep, HRV, body battery, resting HR,
+    steps, stress, from get_health_metrics().
 
-By default execute() pulls both. Garmin is best-effort: if it's unavailable the
-agent still produces the workout briefing from Strava (it just omits the recovery
-read). A caller can also inject a `garmin_data` dict directly (e.g. tests) to
-skip the live Garmin call.
+execute() pulls both. The recovery metrics are best-effort: if that call is
+unavailable, or Garmin simply had no wear-time, the agent still produces the
+workout briefing (it just omits the recovery read).
 
 Run it directly to preview the briefing without side effects:
 
     python agents/health_sync.py
 
-That calls execute() only — it hits Strava, Garmin and Claude but skips run()'s
-side effects (Supabase logging, Discord post, Voyage embedding). It still does a
+That calls execute() only — it hits Garmin and Claude but skips run()'s side
+effects (Supabase logging, Discord post, Voyage embedding). It still does a
 read-only Supabase lookup for last week's stats (for the WoW comparison).
 """
 
@@ -42,17 +41,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents.base import BaseAgent, AgentResult                       # noqa: E402
 from agents.schemas import HealthOutput, Activity                    # noqa: E402
 from evals.checks import run_health_checks                           # noqa: E402
-from integrations.strava import get_recent_activities                # noqa: E402
-from integrations.garmin import get_health_metrics                   # noqa: E402
+from integrations.garmin import (                                    # noqa: E402
+    get_recent_activities,
+    get_health_metrics,
+)
 
 
 SYSTEM_PROMPT = """\
 You are a training companion writing a short daily health sync for an athlete to
-read on Discord. You draw on TWO sources:
-  - Strava workouts (the source of truth for what they DID): already-computed
-    weekly stats with a week-over-week comparison, plus the individual
-    activities from the last 7 days.
-  - Garmin health metrics (how they FEEL / recovery): sleep, HRV, body battery,
+read on Discord. You draw on TWO kinds of Garmin data:
+  - Workouts (the source of truth for what they DID): already-computed weekly
+    stats with a week-over-week comparison, plus the individual activities from
+    the last 7 days.
+  - Health metrics (how they FEEL / recovery): sleep, HRV, body battery,
     resting heart rate, steps and stress. May be partially or fully absent —
     individual fields come through as null when Garmin had no reading.
 
@@ -110,11 +111,11 @@ def _fmt_duration(seconds: int) -> str:
 
 def compute_weekly_stats(activities: List[dict]) -> dict:
     """
-    Roll a week of normalized Strava activities (see integrations.strava) up
+    Roll a week of normalized Garmin activities (see integrations.garmin) up
     into the weekly figures. Pure function — no network, no clock dependence
     beyond what's passed in — so it's cheap to unit-test.
 
-    Distances are in miles and elevation in feet (Strava integration converts
+    Distances are in miles and elevation in feet (the Garmin integration converts
     from SI before this sees them).
 
     Returns:
@@ -193,8 +194,8 @@ def _week_over_week(current: dict, prior: Optional[dict]) -> Optional[dict]:
 
 def _to_activities(activities: List[dict]) -> List[Activity]:
     """
-    Map normalized Strava activities (integrations.strava) onto the typed
-    Activity schema. Pure — no I/O — so it's cheap to unit-test. Strava's
+    Map normalized Garmin activities (integrations.garmin) onto the typed
+    Activity schema. Pure — no I/O — so it's cheap to unit-test. Garmin's
     moving_time is in seconds; the schema wants minutes, so we convert here.
     """
     out: List[Activity] = []
@@ -239,35 +240,18 @@ def _has_garmin_metrics(garmin: Optional[dict]) -> bool:
 
 class HealthSyncAgent(BaseAgent):
 
-    def __init__(
-        self,
-        garmin_data: Optional[dict] = None,
-        fetch_garmin: bool = True,
-    ):
+    def _fetch_garmin_metrics(self) -> Optional[dict]:
         """
-        garmin_data: a pre-built health-metrics dict (sleep, HRV, body battery,
-            …). If provided, it's used as-is and the live Garmin call is skipped
-            — handy for tests. Leave it None to fetch from Garmin in execute().
-        fetch_garmin: set False to skip Garmin entirely (Strava-only briefing).
-
-        Garmin metrics are forwarded to Claude verbatim for the recovery read;
-        Strava stays the source of truth for the workouts themselves.
-        """
-        super().__init__()
-        self.garmin_data = garmin_data
-        self.fetch_garmin = fetch_garmin
-
-    def _fetch_garmin(self) -> Optional[dict]:
-        """
-        Pull yesterday's Garmin recovery metrics. Best-effort: Garmin has no
-        official API and can be flaky, and it's not the source of truth here, so
-        a failure must not sink the workout briefing — we log and return None,
-        and the agent simply omits the recovery section.
+        Pull yesterday's Garmin recovery metrics (sleep, HRV, body battery, …).
+        Best-effort: Garmin has no official API and can be flaky, and these are
+        the recovery *supplement* rather than the source of truth, so a failure
+        must not sink the workout briefing — we log and return None, and the
+        agent simply omits the recovery section.
         """
         try:
             return get_health_metrics()
         except Exception as e:
-            print(f"[{self.agent_id}] Garmin fetch failed, continuing without it: {e}")
+            print(f"[{self.agent_id}] Garmin metrics fetch failed, continuing without it: {e}")
             return None
 
     @property
@@ -300,14 +284,13 @@ class HealthSyncAgent(BaseAgent):
         return (prior[0].get("metadata") or {}).get("weekly")
 
     def execute(self) -> AgentResult:
-        # 1a. Strava: last 7 days of workouts (source of truth for what you did).
-        activities = get_recent_activities(days=7)
+        # 1a. Garmin: last 7 days of workouts (source of truth for what you did).
+        activities = get_recent_activities(days_back=7)
 
         # 1b. Garmin: yesterday's recovery metrics (how you feel). Best-effort —
-        #     skipped if a caller injected garmin_data or disabled fetching.
-        if self.garmin_data is None and self.fetch_garmin:
-            self.garmin_data = self._fetch_garmin()
-        has_garmin = _has_garmin_metrics(self.garmin_data)
+        #     None if Garmin was unavailable or there was no wear-time.
+        garmin_metrics = self._fetch_garmin_metrics()
+        has_garmin = _has_garmin_metrics(garmin_metrics)
 
         # 2. Compute this week's stats + week-over-week, all in Python. The
         #    by-type breakdown / avg-HR / elevation used by the Discord render
@@ -329,12 +312,12 @@ class HealthSyncAgent(BaseAgent):
         )
 
         if not activities and not has_garmin:
-            # Nothing from Strava and nothing usable from Garmin — say so plainly
-            # rather than asking Claude to narrate an empty week. We still build a
-            # (empty) HealthOutput and run the Tier 1 checks so governance has a
-            # row for the run, just like every other path.
+            # No workouts and nothing usable from Garmin recovery metrics — say so
+            # plainly rather than asking Claude to narrate an empty week. We still
+            # build a (empty) HealthOutput and run the Tier 1 checks so governance
+            # has a row for the run, just like every other path.
             narrative = (
-                "No Strava activities in the last 7 days. Enjoy the rest, or get "
+                "No Garmin activities in the last 7 days. Enjoy the rest, or get "
                 "one in!"
             )
             output = self._build_output(
@@ -365,7 +348,7 @@ class HealthSyncAgent(BaseAgent):
             "yesterday": yesterday,
             "weekly": weekly,
             "week_over_week": wow,  # None on the first run
-            "garmin": self.garmin_data,  # None if Garmin was unavailable/skipped
+            "garmin": garmin_metrics,  # None if Garmin recovery was unavailable
         }
 
         narrative = self.call_claude(
@@ -409,7 +392,7 @@ class HealthSyncAgent(BaseAgent):
                 "weekly": weekly,
                 "activity_count": output.week_activity_count,
                 "week_distance_miles": output.week_distance_miles,
-                "has_garmin": _has_garmin_metrics(self.garmin_data),
+                "has_garmin": has_garmin,
                 "eval_passed": all(r["passed"] for r in self._eval_results),
             },
         )
@@ -487,6 +470,6 @@ if __name__ == "__main__":
     except AttributeError:
         pass
 
-    agent = HealthSyncAgent()  # pulls both Strava + Garmin live
+    agent = HealthSyncAgent()  # pulls Garmin workouts + recovery metrics live
     result = agent.execute()
     print(result.content)

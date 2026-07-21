@@ -50,7 +50,7 @@ export const AGENTS: AgentMeta[] = [
     agentId: 'health-sync',
     name: 'Health Sync',
     description:
-      'Syncs Strava / Garmin activity and readiness, computes the trends, and writes a short daily check-in.',
+      'Syncs Garmin activity and readiness, computes the trends, and writes a short daily check-in.',
     room: 'gym',
     ambient: '#22d3ee', // cool dawn light through the window
     palette: { skin: '#d9a679', hair: '#4b2e13', shirt: '#0891b2', pants: '#111827' },

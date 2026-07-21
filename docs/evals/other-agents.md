@@ -113,7 +113,7 @@ prices is a liability; Python computing $340 and the LLM explaining *why* is not
 
 ## health-sync
 
-**What it does.** Daily activity summary from Strava (Garmin later). Lowest-risk
+**What it does.** Daily activity summary from Garmin. Lowest-risk
 agent — it's reporting on data, not taking action, and the stakes of being wrong
 are low. Eval is correspondingly lighter.
 

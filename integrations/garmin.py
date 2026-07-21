@@ -1,18 +1,25 @@
 """
-garmin.py — health metrics for the health-sync agent, via Garmin Connect.
+garmin.py — workouts AND health metrics for the health-sync agent, via Garmin
+Connect. This is the single source of truth for both sides of the sync.
 
-Division of labor with Strava (see integrations/strava.py): Strava is the source
-of truth for WORKOUTS (what you did). Garmin supplies the recovery side (how you
-feel) — the metrics Strava doesn't have: sleep, HRV, body battery, resting heart
-rate, daily steps and stress. We deliberately do NOT pull workouts from Garmin;
-that would just duplicate Strava.
+Two public entry points:
+  - get_recent_activities(days_back) → normalized list of recent WORKOUTS (what
+    you did): name, type, distance, duration, HR, elevation, calories.
+  - get_health_metrics(date=None)    → RECOVERY metrics (how you feel) that a
+    workout log doesn't have: sleep, HRV, body battery, resting heart rate,
+    daily steps and stress.
 
-The public entry point is `get_health_metrics(date=None)`. It logs in once and
-returns a single flat dict of yesterday's metrics (or for an explicit date),
-already converted to friendly units (sleep in hours, not seconds). Every metric
-is fetched independently and best-effort: if Garmin has no data for it (or the
-call fails), that metric comes back as None rather than sinking the whole pull.
-The agent forwards this dict to Claude verbatim for the recovery read.
+get_health_metrics logs in once and returns a single flat dict of yesterday's
+metrics (or for an explicit date), already converted to friendly units (sleep in
+hours, not seconds). Every metric is fetched independently and best-effort: if
+Garmin has no data for it (or the call fails), that metric comes back as None
+rather than sinking the whole pull. The agent forwards this dict to Claude
+verbatim for the recovery read.
+
+get_recent_activities returns the same compact, imperial activity shape the agent
+already consumes (distances in miles, elevation in feet, moving time in seconds).
+The device syncs activities to Garmin Connect directly, so this covers everything
+the (now-removed) Strava integration used to provide.
 
 AUTH NOTE: Garmin has no official API, so we use the `garminconnect` library,
 which drives the same backend the mobile app uses. Garmin rate-limits *logins*
@@ -35,6 +42,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 _SECONDS_PER_HOUR = 3600.0
+
+# Garmin reports activity distance/elevation in SI (meters). We convert to the
+# imperial display units the agent already works in — distance in miles,
+# elevation in feet — so the health-sync compute path is unchanged from when
+# Strava supplied these numbers already-converted. (Numbers in Python, not Claude.)
+_METERS_PER_MILE = 1609.344
+_METERS_PER_FOOT = 0.3048
 
 # Where we cache Garmin session tokens so a daily run doesn't re-login (and trip
 # Garmin's login rate limit) every time. Override with GARMIN_TOKENSTORE.
@@ -261,6 +275,110 @@ def get_health_metrics(date: Optional[str] = None) -> dict:
     }
 
 
+# ── Workouts (activities) ─────────────────────────────────────────────────────
+
+def _display_type(type_key: Optional[str]) -> str:
+    """
+    Turn Garmin's activityType.typeKey ('running', 'strength_training') into a
+    readable label ('Running', 'Strength Training'). Falls back to 'Workout' when
+    the type is missing, mirroring the default the agent used under Strava.
+    """
+    if not type_key or not isinstance(type_key, str):
+        return "Workout"
+    return type_key.replace("_", " ").title()
+
+
+def _normalize_activity(a: dict) -> dict:
+    """
+    Flatten one Garmin Connect activity into the compact, imperial shape the
+    health-sync agent consumes — the exact same keys the old Strava integration
+    emitted, so compute_weekly_stats / _to_activities need no changes.
+
+    Garmin reports distance/elevation in meters and durations in seconds. We
+    convert distance→miles and elevation→feet here (moving time stays in seconds;
+    the agent converts to minutes). Every field is best-effort: anything Garmin
+    didn't record comes back as None rather than crashing the pull.
+    """
+    distance_m = a.get("distance") or 0.0
+
+    # Prefer moving time; Garmin omits movingDuration for some sports (e.g.
+    # strength training), so fall back to the total timer duration.
+    moving_time_s = a.get("movingDuration")
+    if not moving_time_s:
+        moving_time_s = a.get("duration") or 0
+
+    elevation_m = a.get("elevationGain")  # None for indoor/no-baro activities
+
+    return {
+        "id": a.get("activityId"),
+        "name": a.get("activityName") or "",      # user-authored → untrusted
+        "type": _display_type((a.get("activityType") or {}).get("typeKey")),
+        "date": a.get("startTimeLocal") or a.get("startTimeGMT", ""),
+        "distance_mi": round(distance_m / _METERS_PER_MILE, 2),
+        "moving_time_s": int(moving_time_s or 0),
+        "elevation_gain_ft": (
+            round(elevation_m / _METERS_PER_FOOT, 1) if elevation_m else 0.0
+        ),
+        "average_heartrate": a.get("averageHR"),   # only if HR was recorded
+        "max_heartrate": a.get("maxHR"),
+        "calories": a.get("calories"),
+    }
+
+
+def _within_window(date_str: str, cutoff: datetime) -> bool:
+    """
+    True if an activity's local start time is on/after `cutoff`. Garmin's
+    startTimeLocal is 'YYYY-MM-DD HH:MM:SS'. If it can't be parsed we keep the
+    activity (over-fetching a stale one is safer than silently dropping a real
+    workout) and log it.
+    """
+    if not date_str:
+        return True
+    try:
+        started = datetime.strptime(date_str[:19], "%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        print(f"[garmin] couldn't parse activity date {date_str!r}; keeping it")
+        return True
+    return started >= cutoff
+
+
+def get_recent_activities(days_back: int = 7) -> list[dict]:
+    """
+    Fetch recent workouts from Garmin Connect, normalized to the agent's shape.
+
+    Each record carries: id, name, type, date, distance_mi, moving_time_s,
+    elevation_gain_ft, average_heartrate, max_heartrate, calories. Distances are
+    already in miles and elevation in feet (converted here); moving time is in
+    seconds (the agent converts to minutes). Missing fields come back as None.
+
+    Garmin's API has no date-range filter, so we over-fetch the most recent
+    `days_back * 2` activities via get_activities(0, days_back*2) and trim to
+    those started within the last `days_back` days. Returns newest-first, or an
+    empty list if there were none (or the activities call failed — a workout pull
+    failing must not sink the recovery read, same best-effort contract as the
+    per-metric fetchers).
+
+    Login failure still raises (via _login) — that's a real, actionable problem.
+    """
+    client = _login()
+
+    cutoff = datetime.now() - timedelta(days=days_back)
+    try:
+        raw = client.get_activities(0, days_back * 2) or []
+    except Exception as e:
+        print(f"[garmin] activities unavailable: {e}")
+        return []
+
+    activities = [
+        _normalize_activity(a) for a in raw if isinstance(a, dict)
+    ]
+    activities = [a for a in activities if _within_window(a["date"], cutoff)]
+
+    # Newest first, matching what the agent expects for "yesterday's workout".
+    activities.sort(key=lambda x: x["date"], reverse=True)
+    return activities
+
+
 # ── Direct-run harness (hits Garmin live; no other side effects) ──────────────
 
 if __name__ == "__main__":
@@ -272,4 +390,7 @@ if __name__ == "__main__":
     except AttributeError:
         pass
 
+    print("── recent activities ──")
+    print(json.dumps(get_recent_activities(), indent=2))
+    print("\n── health metrics ──")
     print(json.dumps(get_health_metrics(), indent=2))

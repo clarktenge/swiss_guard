@@ -37,7 +37,7 @@ export const NAV_ITEMS: NavItem[] = [
     label: 'Health',
     icon: HeartPulse,
     blurb:
-      'Training load, readiness, and activity trends synced from Strava / Garmin by the health-sync agent.',
+      'Training load, readiness, and activity trends synced from Garmin by the health-sync agent.',
   },
   {
     id: 'jobs',

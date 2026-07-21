@@ -42,7 +42,7 @@ governance) are load-bearing, not incidental.
 ## Commands
 
 ```bash
-# Run an agent end-to-end (the path GitHub Actions uses): hits Gmail/Strava/etc.,
+# Run an agent end-to-end (the path GitHub Actions uses): hits Gmail/Garmin/etc.,
 # calls Claude, logs to Supabase, posts to Discord. Needs a populated .env.
 python -c "from agents.email_triage import EmailTriageAgent; EmailTriageAgent().run()"
 
@@ -140,7 +140,7 @@ spaces) and requires re-embedding the table.
 
 ### Integrations & config
 
-- `integrations/` — one module per external service (gmail, strava, garmin,
+- `integrations/` — one module per external service (gmail, garmin,
   stocks/yfinance, job_boards, discord_notify). Discord uses **per-channel
   webhooks**, not a bot; messages are chunked under Discord's char limit.
 - `config/companies.py` — job-scout target companies. `ats` field routes to a

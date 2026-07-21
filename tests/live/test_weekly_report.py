@@ -6,7 +6,7 @@
 #   • posts the wrap-up to your weekly-report Discord webhook
 #   • generates a Voyage AI embedding + inserts Supabase rows (via run())
 #
-# It does NOT call any external content APIs (Gmail, Strava, job boards) — the
+# It does NOT call any external content APIs (Gmail, Garmin, job boards) — the
 # weekly report only reads what the other agents already stored.
 #
 # Run it once with:  python test_weekly_report.py
